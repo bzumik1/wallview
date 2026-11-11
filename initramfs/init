@@ -1,0 +1,76 @@
+#!/bin/busybox sh
+
+/bin/busybox --install -s /bin
+mkdir -p /proc /sys /dev /tmp /run
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+mount -t configfs configfs /sys/kernel/config
+
+backlight=$(ls -d /sys/class/backlight/* 2>/dev/null | head -n 1)
+signal_init() {
+	[ -n "$backlight" ] || return
+	max=$(cat "$backlight/max_brightness")
+	for blink in 1 2 3; do
+		echo 0 > "$backlight/brightness"
+		sleep 0.4
+		echo "$max" > "$backlight/brightness"
+		sleep 0.4
+	done
+}
+
+save_log() {
+	misc=""
+	for uevent in /sys/class/block/*/uevent; do
+		grep -qx "PARTNAME=misc" "$uevent" && misc=$(sed -n 's/^DEVNAME=//p' "$uevent")
+	done
+	[ -n "$misc" ] || return
+	{
+		echo "WALLVIEW-LOG $1"
+		dmesg
+		echo "--- udc"
+		ls /sys/class/udc
+		echo "--- gadget UDC"
+		cat "$gadget/UDC" 2>&1
+	} > /tmp/wallview.log
+	dd if=/dev/zero of="/dev/$misc" bs=512 seek=2048 count=2048 2>/dev/null
+	dd if=/tmp/wallview.log of="/dev/$misc" bs=512 seek=2048 count=2048 2>/dev/null
+	sync
+}
+
+signal_init
+
+gadget=/sys/kernel/config/usb_gadget/wallview
+mkdir -p "$gadget"
+echo 0x1d6b > "$gadget/idVendor"
+echo 0x0104 > "$gadget/idProduct"
+mkdir -p "$gadget/strings/0x409"
+echo wallview-dev > "$gadget/strings/0x409/serialnumber"
+echo WallView > "$gadget/strings/0x409/manufacturer"
+echo "NSPanel Pro WallView" > "$gadget/strings/0x409/product"
+mkdir -p "$gadget/configs/c.1/strings/0x409"
+echo "serial + network" > "$gadget/configs/c.1/strings/0x409/configuration"
+mkdir -p "$gadget/functions/acm.usb0" "$gadget/functions/ncm.usb0"
+ln -s "$gadget/functions/acm.usb0" "$gadget/configs/c.1/"
+ln -s "$gadget/functions/ncm.usb0" "$gadget/configs/c.1/"
+
+for attempt in $(seq 1 60); do
+	udc=$(ls /sys/class/udc 2>/dev/null | head -n 1)
+	[ -n "$udc" ] && break
+	sleep 0.5
+done
+echo "$udc" > "$gadget/UDC"
+
+sleep 1
+ifconfig usb0 192.168.7.2 netmask 255.255.255.0 up
+telnetd -l /bin/sh
+
+save_log early
+(sleep 15 && save_log late) &
+
+while true; do
+	setsid getty -n -l /bin/sh 0 ttyGS0 vt100
+	sleep 1
+done

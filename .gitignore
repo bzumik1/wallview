@@ -1,0 +1,10 @@
+backup/
+extract/
+out/
+local/
+maskrom-loader/
+*.img
+*.bin
+*.log
+log/
+.DS_Store
