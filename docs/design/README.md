@@ -16,6 +16,10 @@ The approved WallView OS logo is a blue "W" made of overlapping bands.
 
 The Home Assistant logo is not used anywhere in the WallView UI or firmware; a home icon or the WallView logo is used instead.
 
+Rejected earlier concept (frame with a wave), kept for history only:
+
+![Rejected logo concept](concepts/logo-frame-wave-rejected.png)
+
 ## Boot screen
 
 Static logo from U-Boot and the kernel, then an animated logo in Cog, then a crossfade to the dashboard (see the plan, phase 4).
