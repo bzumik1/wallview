@@ -21,6 +21,7 @@ Phase 0 (preparation) is mostly done on a development NSPanel Pro 86 (Gen1). The
 - [Board notes and test points](docs/board-nspanel-pro-86.md): photos and measured voltages of both board sides
 - [Incident 2026-11-11](docs/incident-2026-11-11-recovery-boot.md): panel stuck booting the first test image, recovery plan
 - [Development environment](docs/dev-environment.md): macOS test station, Lima build VM, tools
+- [Design](docs/design/README.md): WallView OS design kit, logo, colour tokens, typography
 
 ## Repository layout
 
