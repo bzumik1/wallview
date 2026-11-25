@@ -1,0 +1,27 @@
+#!/bin/sh
+
+DATA_OFFSET=$((320 * 1048576))
+
+find_partition() {
+	for uevent in /sys/class/block/*/uevent; do
+		grep -qx "PARTNAME=$1" "$uevent" && sed -n 's/^DEVNAME=//p' "$uevent"
+	done
+}
+
+start() {
+	cache=$(find_partition cache | head -n 1)
+	[ -n "$cache" ] || { echo "data: cache partition not found"; return 1; }
+	loop=$(losetup -f)
+	losetup -o "$DATA_OFFSET" "$loop" "/dev/$cache" || return 1
+	mkdir -p /data
+	if ! mount -t ext4 -o noatime "$loop" /data 2>/dev/null; then
+		echo "data: creating file system"
+		mke2fs -q -t ext4 -L wallview-data "$loop" && mount -t ext4 -o noatime "$loop" /data
+	fi
+	mkdir -p /data/wallview /data/cog
+}
+
+case "$1" in
+start) start ;;
+stop) umount /data 2>/dev/null ;;
+esac

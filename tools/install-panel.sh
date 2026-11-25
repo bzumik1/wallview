@@ -4,7 +4,7 @@ set -euo pipefail
 PANEL=${1:?usage: install-panel.sh <panel-ip> <loader|primary|golden>}
 SLOT=${2:?usage: install-panel.sh <panel-ip> <loader|primary|golden>}
 WALLVIEW=$(cd "$(dirname "$0")/.." && pwd)
-IMAGE=$WALLVIEW/out/recovery-wallview.img
+IMAGE=${IMAGE:-$WALLVIEW/out/recovery-wallview.img}
 SSH_OPTIONS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10)
 
 panel() {

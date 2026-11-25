@@ -22,6 +22,7 @@ Mainline Linux 6.18 boots on an NSPanel Pro 86 (Gen1) with the original bootload
 - [Phase 0 findings](docs/phase0-findings.md): unit, firmware, partitions, vendor DTS, vendor U-Boot behaviour
 - [Board notes and test points](docs/board-nspanel-pro-86.md): photos and measured voltages of both board sides
 - [Incident 2026-11-11](docs/incident-2026-11-11-recovery-boot.md): panel stuck booting the first test image, recovery plan
+- [WallView OS](docs/wallview-os.md): eMMC layout, boot flow, root file system, data partition, kiosk
 - [Development environment](docs/dev-environment.md): macOS test station, Lima build VM, tools
 - [Design](docs/design/README.md): WallView OS design kit, logo, colour tokens, typography
 
@@ -33,7 +34,8 @@ Mainline Linux 6.18 boots on an NSPanel Pro 86 (Gen1) with the original bootload
 | `kernel/dts/` | mainline board device tree (work in progress) |
 | `kernel/config/` | kernel configuration fragment merged on top of `defconfig` |
 | `kernel/patches/` | kernel patches (display panel driver) |
-| `initramfs/` | test initramfs `init` (logs, USB gadget, Wi-Fi, SSH) and DHCP script |
+| `initramfs/` | initramfs `init` (loader, rescue system, switch to the root file system), `wallview-boot`, DHCP script |
+| `buildroot/` | Buildroot `BR2_EXTERNAL` tree for the WallView OS root file system |
 | `tools/` | Android boot image builder, test image build script, kexec deploy scripts |
 | `reference/vendor/` | decompiled vendor device tree used as hardware reference |
 

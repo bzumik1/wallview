@@ -70,6 +70,10 @@ install_image() {
 	[ -n "$partition" ] || { echo "partition for $1 not found" >&2; exit 1; }
 	[ "$(sha256sum "$2" | cut -d' ' -f1)" = "$3" ] || { echo "image checksum mismatch, not written" >&2; exit 1; }
 	[ "$(dd if="$2" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] || { echo "not an Android boot image" >&2; exit 1; }
+	if [ "$1" = primary ] && [ "$(stat -c %s "$2")" -gt $((320 * 1048576)) ]; then
+		echo "primary image larger than 320 MiB would overwrite /data" >&2
+		exit 1
+	fi
 	write_verified "$2" "$partition" "$3"
 	echo "$1 image written to $partition and verified"
 }

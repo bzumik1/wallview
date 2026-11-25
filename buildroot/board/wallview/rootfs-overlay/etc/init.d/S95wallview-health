@@ -1,0 +1,11 @@
+#!/bin/sh
+
+[ "$1" = start ] || exit 0
+grep -q "wallview.slot=primary" /proc/cmdline || exit 0
+(
+	until ip -4 addr show wlan0 2>/dev/null | grep -q "inet "; do
+		sleep 2
+	done
+	sleep 60
+	wallview-boot reset >/dev/null
+) </dev/null >/dev/null 2>&1 &
