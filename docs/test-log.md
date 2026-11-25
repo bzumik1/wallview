@@ -47,3 +47,16 @@ Goal: find out whether the BCB path (U-Boot running on our DTB) is safe, without
 
 - `kexec` from our running kernel into a freshly built kernel and initramfs works; the panel is back on Wi-Fi after about 15 seconds.
 - Development no longer needs the Loader mode or any eMMC write per iteration.
+
+## 2026-11-25 – panel 2: kexec with a new DTB
+
+- `kexec-tools` 2.0.28 on arm64 tries `kexec_file_load` first. That syscall ignores `--dtb` and reuses the running device tree, so DTB changes had no effect.
+- Forcing `kexec_load` (`-c`) with our DTB hung the panel three times (three power cycles needed): our DTB has no `/memory` node, which the vendor U-Boot normally adds. `/proc/kcore` (`CONFIG_PROC_KCORE`) is also needed by `kexec_load` on arm64.
+- Fix: `tools/kexec-dtb.sh` copies `/memory` and `/memreserve/` from the running `/sys/firmware/fdt` into the new DTB; `tools/kexec-panel.sh` uses `kexec_load` when the running kernel has `/proc/kcore`, otherwise `kexec_file_load` (keeps the old DTB; run it twice).
+
+## 2026-11-25 – panel 2: display
+
+- New panel driver `panel-itead-nspanel-pro` (kernel patch) sends the vendor ST7701S init sequence unchanged; mainline `panel-sitronix-st7701` computes its registers from parameters that do not reproduce the vendor values.
+- First try: DRM up, `card0-DSI-1` connected, panel answers DCS reads (power mode `0x9c`: sleep out, display on), DSI PHY locked and streaming, but the screen stayed black. "All pixels on" (`0x23`) showed white, so the panel itself worked.
+- Fix: `MIPI_DSI_CLOCK_NON_CONTINUOUS`, as all mainline ST7701 panels use. With a continuous HS clock the panel ignores the video stream.
+- Result: Linux text console on the panel, RGB test pattern with correct colour order.

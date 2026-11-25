@@ -91,7 +91,9 @@ Extracted from the `resource` partition (also embedded in `boot`) and decompiled
 - `simple-panel-dsi`, 2 lanes, `dsi,format = 0` (RGB888), `dsi,flags = 0x803`.
 - Pixel clock 16 MHz, 480×480, h: front porch 12 / sync 10 / back porch 15, v: front porch 12 / sync 8 / back porch 15.
 - Physical size 72 × 70 mm.
-- The full `panel-init-sequence` (ST7701 command 2 `ff 77 01 …`) is in the vendor DTS. It is the source for the `panel-sitronix-st7701` entry.
+- The full `panel-init-sequence` (ST7701 command 2 `ff 77 01 …`) is in the vendor DTS. It is sent unchanged by our driver `panel-itead-nspanel-pro` (`kernel/patches/`); the parametric `panel-sitronix-st7701` driver cannot reproduce several of its values.
+- Power: `vcc3v3_lcd` (RK809 SWITCH_REG2). Reset: GPIO3_A0, active low. Delays: prepare 20 ms, reset 20 ms, init 20 ms, enable 40 ms.
+- Mainline needs `MIPI_DSI_CLOCK_NON_CONTINUOUS` (flags `0x803` in the vendor DTS would mean continuous clock); with a continuous HS clock the panel stays black.
 
 ### RK809 regulators vs mainline `px30-evb.dts`
 

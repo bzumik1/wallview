@@ -95,7 +95,7 @@ The panel is in Loader mode (BOOT + PC).
 
 1. Unplug the panel from the PC.
 2. Hold BOOT and plug the panel into the phone charger; keep BOOT pressed for about 5 seconds.
-3. Expected: Sonoff logo (vendor U-Boot), then stripes (our kernel has no display driver yet), then the backlight blinks 3× quickly (our `init` is running), and within a minute 2× slowly (Wi-Fi has an IP address).
+3. Expected: Sonoff logo (vendor U-Boot), then the Linux text console on the display (an image built before the display driver shows stripes instead), the backlight blinks 3× quickly (our `init` is running), and within a minute 2× slowly (Wi-Fi has an IP address).
 
 ## Step 5: log in
 
@@ -125,7 +125,12 @@ limactl shell wallview -- bash ~/WallView/tools/build-recovery.sh
 ~/WallView/tools/kexec-panel.sh <panel-ip>
 ```
 
-`kexec-panel.sh` uploads `out/Image`, `out/initramfs.cpio.gz` and the DTB into the panel's RAM and runs `kexec`. The new kernel is back on Wi-Fi after about 15 seconds.
+`kexec-panel.sh` uploads `out/Image`, `out/initramfs.cpio.gz` and the DTB into the panel's RAM and runs `kexec`. The new kernel is back on Wi-Fi after about 15 seconds. Wait for it by watching `/proc/sys/kernel/random/boot_id` change.
+
+How the DTB is passed:
+
+- If the running kernel has `/proc/kcore` (`CONFIG_PROC_KCORE=y`), the script uses `kexec_load` (`kexec -c`) with our DTB. Before that, `tools/kexec-dtb.sh` copies the `/memory` node and `/memreserve/` entries from the running device tree (`/sys/firmware/fdt`, which contains the vendor U-Boot's fixups) into it. Without the memory node the new kernel hangs.
+- Otherwise it uses `kexec_file_load`, which works but keeps the running DTB. Run the script a second time from the new kernel to switch the DTB.
 
 If a new kernel does not come back, unplug and repeat step 4: the image in `recovery` still has working Wi-Fi.
 

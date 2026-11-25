@@ -55,6 +55,8 @@ Sources (in `~/src` inside the VM):
 2. a busybox initramfs from `initramfs/init` (backlight blink, USB gadget with ACM serial + NCM network, logs saved to the unused part of `misc`, and with local Wi-Fi credentials also Wi-Fi, SSH and `kexec`),
 3. an Android boot image v0 with the DTB in an `RSCE` resource at block 13, using `tools/mkbootimg.py`.
 
+Kernel patches in `kernel/patches/` are applied to the kernel tree by the build script (skipped if already applied). Currently: the panel driver `panel-itead-nspanel-pro`.
+
 Kernel configuration: `defconfig` plus the fragment `kernel/config/wallview.config`, merged by the build script. Notable: `RESET_GPIO=y` (needed by `mmc-pwrseq-simple` for the Wi-Fi reset), `RTW88_8723DS=y`, `CFG80211`/`MAC80211` built in, so no modules are needed in the initramfs.
 
 How to boot and iterate on the panel is described in the [bring-up guide](bring-up-guide.md). In short: write `recovery` once, boot it with BOOT + phone charger, then use `tools/kexec-panel.sh <panel-ip>` for every new build.
