@@ -75,3 +75,10 @@ Goal: find out whether the BCB path (U-Boot running on our DTB) is safe, without
 - **Zigbee**: the SM-044 module (EFR32MG21) is on **UART5** (`ttyS1`). An ASH reset frame (`1a c0 38 bc 7e`) at 115200 baud without RTS/CTS was answered with `11 1a c1 02 0b 0a 52 7e` (XON + `RSTACK`): EZSP NCP firmware, software flow control. No answer on UART4.
 - **Light/proximity sensor**: chip id `0x5f`, unknown to mainline `stk3310` but the register map works (driver only logs "new unknown chip id"). The driver default (gain scale 6.4, integration time 0.74 ms) always reads 0 indoors; with scale 0.1 and 189 ms: 0–10 in the dark, 183 with the dining room light at 1 % (switched through Home Assistant), then back down. Proximity reads 3 with nothing in front.
 - **Touch controller**: answers the CST3xx protocol of the mainline `hynitron_cstxxx` driver (check code `0xcaca`, firmware `0x03000001`, resolution 480×480 from register `0xd1f8`, touch frames end with `0xab`). It does not enter the CST3xx bootloader (`0xa002` reads 0; the reset line GPIO0_B4 itself works), so the patch adds a `hynitron,cst226se` entry that skips the bootloader presence check. Probe succeeds, `input0` "Hynitron cst3xx Touchscreen", IRQ on GPIO0_B5. Touch events still to be tested with the touch panel connected.
+
+## 2026-11-25 – panel 2: audio
+
+- DTS following the RK3326 Odroid Go layout: RK809 codec (`rk817` driver, `rockchip,mic-in-differential`) on I2S1 with `simple-audio-card` "NSPanel Pro", MCLK from `SCLK_I2S1_OUT`, routing Mic → MICL, SPKO → Speaker. No external amplifier GPIO in the vendor DTS.
+- Result: card 0 "NSPanel Pro" (`ff070000.i2s-rk817-hifi`), mixer controls `Master`, `Mic Capture Gain`, `Playback Mux` (HP/SPK, default HP).
+- Capture (16 kHz stereo): after about 0.5 s of ADC settling, channel 0 (microphone) has DC 2075 and 14 LSB RMS noise in a quiet room, channel 1 7.8 LSB. Playback through the speaker (`Playback Mux` = SPK) and a voice test are still to do (it was night).
+- `alsa-utils` (`aplay`, `arecord`, `amixer`) and the ALSA configuration (without UCM) are in the initramfs; the image is 59.3 MiB of the 64 MiB `recovery` partition.

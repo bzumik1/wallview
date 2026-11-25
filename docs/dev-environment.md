@@ -25,7 +25,7 @@ Packages inside the VM:
 sudo apt-get install build-essential git bc bison flex libssl-dev libelf-dev \
   libgnutls28-dev uuid-dev swig python3-dev python3-pyelftools python3-setuptools \
   device-tree-compiler cpio kmod rsync ccache u-boot-tools xz-utils zstd lz4 \
-  busybox-static qemu-user-static wpasupplicant dropbear-bin kexec-tools
+  busybox-static qemu-user-static wpasupplicant dropbear-bin kexec-tools alsa-utils
 ```
 
 `kexec-tools` asks whether to load kexec at shutdown; answer no (`echo "kexec-tools kexec-tools/load_kexec boolean false" | sudo debconf-set-selections` before installing).
