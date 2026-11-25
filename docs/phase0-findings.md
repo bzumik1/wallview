@@ -29,6 +29,16 @@ Collected on 2026-11-11 from the development unit. Most of the survey was done o
 
 ADB is disabled. The eWeLink "tap Device ID 8×" developer mode trick does not work on this firmware. The power-cycle recovery trick was not caught in time by hand.
 
+A second unit (bought 2026-11-25) had older firmware:
+
+| Property | Unit 1 | Unit 2 |
+|---|---|---|
+| `ro.product.version` | `NSPanel86P_1.6.5` | `NSPanel86P_1.4.1` |
+| Vendor build date | 2026-10-10 | 2024-12-09 |
+| U-Boot build | 2026-10-10 | 2024-12-09 (different binary, same features) |
+| `resource` (vendor DTB), `trust` | – | byte-identical to unit 1 |
+| eMMC, GPT | Samsung 8 GB | identical |
+
 ## Partition table (GPT)
 
 | Partition | Start LBA | Sectors | Size |
@@ -74,6 +84,7 @@ Extracted from the `resource` partition (also embedded in `boot`) and decompiled
 - Wi-Fi: `wifi_chip_type = "RTL8723DS"`.
 - Debug console: `fiq-debugger` on UART2 (`uart2m0` pins GPIO1_D2/D3), 1 500 000 baud.
 - BOOT button: `adc-keys` on SARADC channel 2. The "volume up" key (press threshold 17 000 µV, key-up 1 800 000 µV) is what U-Boot treats as the download key.
+- Wi-Fi power: `mmc-pwrseq-simple` with `reset-gpios = GPIO0_A2` active low (same as mainline `px30-evb`), SDIO controller `ff380000`, host wake GPIO0_A5. RK809 clkout2 is assigned to Bluetooth.
 
 ### Display (ST7701S over DSI)
 
@@ -108,9 +119,19 @@ IO domains (vendor): vccio1 = vcc1v8_soc, vccio2 = vccio_sd, vccio3 = vcc_3v0, v
 
 Important for anything we boot through the vendor bootloader:
 
-- **"Using kernel dtb":** U-Boot takes the device tree from the image it is about to boot (the second-stage `RSCE` resource of `boot` or `recovery`) and probes its own drivers from it. U-Boot's built-in DTB has no keys.
-- The BOOT button is only seen if that DTB contains `saradc` and `adc-keys`. **Any DTB we boot through the vendor U-Boot must include them**, otherwise the BOOT button stops working (see the [incident report](incident-2026-11-11-recovery-boot.md)).
-- Boot mode from the `misc` BCB (both offset 0 and 16 KiB work): `boot-recovery` boots the `recovery` partition, `bootonce-bootloader` enters rockusb.
+The binary corresponds roughly to Rockchip `next-dev` from mid-2018. Findings below were checked against the disassembly of the unit 2 binary and the matching sources.
+
+- **"Using kernel dtb":** in `board_init` U-Boot loads the device tree from the image selected by the boot mode known at that point (`misc` BCB or the reboot-mode register): `boot` normally, `recovery` when the BCB or register says so. It then probes its own drivers from that DTB. U-Boot's built-in DTB has no keys and no USB PHY.
+- **BOOT button** (`setup_download_mode` in `board_late_init`, i.e. after the DTB was chosen): `key_read(KEY_VOLUMEUP)` via `adc-keys` on SARADC channel 2. If pressed, `rockchip_u2phy_vbus_detect()` decides:
+  - PC (SDP or CDP) → `download` command → rockusb (Loader mode),
+  - no PC (charger/DCP, floating data lines) → `reboot_mode=recovery` for this boot only.
+- The `rockchip_usb2phy` driver only matches `rockchip,rk3128/rk3308/rk3328/rv1108-usb2phy`. A DTB with only `rockchip,px30-usb2phy` makes VBUS detection fail, so BOOT always means recovery. `board_usb_init()` needs a `snps,dwc2` node with `dr_mode = "otg"`.
+- The SARADC device is looked up by name prefix `saradc`, so the node must be called `saradc@…` with compatible `rockchip,rk3399-saradc` (as in mainline). Key thresholds are converted with a fixed 1.8 V reference.
+- **Boot mode sources**, highest priority first: reboot-mode register in PMU GRF `0xff010200` (`0x5242C303` = recovery; cleared by U-Boot after reading, lost on power cycle), BOOT key, `misc` BCB (offset 0 or 16 KiB; `boot-recovery` → `recovery`, `bootonce-bootloader` → rockusb). U-Boot never clears the BCB itself.
+- **Vendor reboot counter:** U-Boot reads vendor storage item 15 (`user_reboot_count`); if its low 16 bits equal 5 it forces recovery and sets `smatekrepair=1` on every boot. Android maintains this counter.
+- **Resource offsets are cached:** the `RSCE` file list is read once (from `boot` or `recovery`, whichever was chosen in `board_init`). The kernel FDT is then taken from the image being booted at the block offset of `rk-kernel.dtb` from that list. Stock `boot` and `recovery` both have `rk-kernel.dtb` at block 13, so our images use block 13 too.
+- **U-Boot on a mainline DTB hangs** (tested 2026-11-25, see the [test log](test-log.md)). Never let the vendor U-Boot choose our image in `board_init` (BCB in `misc` or reboot-mode register). The only safe way to start our image is BOOT + charger.
+- Android's `install-recovery.sh` restores the stock `recovery` from `boot` at every Android boot if it does not match.
 - No Android Verified Boot (no `avb`/`vbmeta`); boot images are not signature-checked. The boot image `id` hash is not verified either.
 - `bootdelay=0`, but the "Hit any key to stop autoboot" path exists → a key on the UART console should stop it.
 - Boot image layout: header v0, page 2048, raw arm64 `Image`, gzip ramdisk, second stage = `RSCE` resource image with `rk-kernel.dtb` and BMP logos. Resource entry format: tag `ENTR`, name (256 bytes), then block offset and size (both u32) at byte 260.

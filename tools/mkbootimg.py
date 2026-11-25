@@ -10,6 +10,7 @@ KERNEL_ADDR = 0x10008000
 RAMDISK_ADDR = 0x11000000
 SECOND_ADDR = 0x10F00000
 TAGS_ADDR = 0x10000100
+VENDOR_DTB_BLOCK = 13
 HEADER_FORMAT = "<8s10I16s512s32s1024s"
 
 
@@ -29,6 +30,10 @@ def make_resource(entries):
     table = bytearray()
     payload = bytearray()
     next_block = 1 + count
+    if next_block > VENDOR_DTB_BLOCK:
+        sys.exit("too many resource entries")
+    payload += b"\0" * ((VENDOR_DTB_BLOCK - next_block) * BLOCK)
+    next_block = VENDOR_DTB_BLOCK
     for name, data in entries:
         entry = bytearray(BLOCK)
         entry[0:4] = b"ENTR"

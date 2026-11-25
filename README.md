@@ -6,17 +6,19 @@ WallView is not affiliated with ITEAD/Sonoff or the Open Home Foundation. "for N
 
 ## Status
 
-Phase 0 (preparation) is mostly done on a development NSPanel Pro 86 (Gen1). The first mainline boot test is blocked until a USB-UART adapter arrives; see the incident report.
+Mainline Linux 6.18 boots on an NSPanel Pro 86 (Gen1) with the original bootloader, without a serial console and without changing anything but the `recovery` partition. Wi-Fi and SSH work; new kernels are started over the network with `kexec`. The first development unit is still stuck from an earlier experiment (see the incident report).
 
 | Phase | State |
 |---|---|
-| 0 · Preparation | backup done, hardware mapped from the vendor DTS, board test points measured |
-| 1 · Bootloader and kernel | build environment ready, first test image built, not booting yet |
+| 0 · Preparation | done: backups of two units, hardware mapped from the vendor DTS, board test points measured |
+| 1 · Bootloader and kernel | in progress: kernel, eMMC, PMIC, backlight, Wi-Fi, SSH, kexec work; display, touch and USB gadget next; vendor U-Boot kept |
 | 2–9 | not started |
 
 ## Documentation
 
 - [Project plan](docs/plan/plan.md) (English transcription of the [original Czech PDF](docs/plan/WallView-projektovy-plan.pdf))
+- [Bring-up guide](docs/bring-up-guide.md): step-by-step procedure to boot mainline Linux on a stock panel safely
+- [Test log](docs/test-log.md): what was tried on the hardware and what happened
 - [Phase 0 findings](docs/phase0-findings.md): unit, firmware, partitions, vendor DTS, vendor U-Boot behaviour
 - [Board notes and test points](docs/board-nspanel-pro-86.md): photos and measured voltages of both board sides
 - [Incident 2026-11-11](docs/incident-2026-11-11-recovery-boot.md): panel stuck booting the first test image, recovery plan
@@ -29,8 +31,9 @@ Phase 0 (preparation) is mostly done on a development NSPanel Pro 86 (Gen1). The
 |---|---|
 | `docs/` | plan, findings, board notes, photos |
 | `kernel/dts/` | mainline board device tree (work in progress) |
-| `initramfs/` | test initramfs `init` (USB gadget console) |
-| `tools/` | Android boot image builder and test image build script |
+| `kernel/config/` | kernel configuration fragment merged on top of `defconfig` |
+| `initramfs/` | test initramfs `init` (logs, USB gadget, Wi-Fi, SSH) and DHCP script |
+| `tools/` | Android boot image builder, test image build script, kexec deploy script |
 | `reference/vendor/` | decompiled vendor device tree used as hardware reference |
 
 Backups, firmware dumps and build outputs are intentionally excluded (`.gitignore`). The original ITEAD firmware must not be distributed; everyone backs up their own unit.

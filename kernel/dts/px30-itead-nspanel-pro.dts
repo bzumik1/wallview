@@ -2,6 +2,7 @@
 
 /dts-v1/;
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/pinctrl/rockchip.h>
 #include "px30.dtsi"
@@ -9,6 +10,44 @@
 / {
 	model = "Sonoff NSPanel Pro";
 	compatible = "itead,nspanel-pro", "rockchip,px30";
+
+	adc-keys {
+		compatible = "adc-keys";
+		io-channels = <&saradc 2>;
+		io-channel-names = "buttons";
+		poll-interval = <100>;
+		keyup-threshold-microvolt = <1800000>;
+
+		esc-key {
+			linux,code = <KEY_ESC>;
+			label = "esc";
+			press-threshold-microvolt = <1310000>;
+		};
+
+		home-key {
+			linux,code = <KEY_HOME>;
+			label = "home";
+			press-threshold-microvolt = <624000>;
+		};
+
+		menu-key {
+			linux,code = <KEY_MENU>;
+			label = "menu";
+			press-threshold-microvolt = <987000>;
+		};
+
+		vol-down-key {
+			linux,code = <KEY_VOLUMEDOWN>;
+			label = "volume down";
+			press-threshold-microvolt = <300000>;
+		};
+
+		vol-up-key {
+			linux,code = <KEY_VOLUMEUP>;
+			label = "volume up";
+			press-threshold-microvolt = <17000>;
+		};
+	};
 
 	aliases {
 		mmc0 = &emmc;
@@ -22,6 +61,13 @@
 		compatible = "pwm-backlight";
 		pwms = <&pwm1 0 25000 0>;
 		power-supply = <&vcc3v3_lcd>;
+	};
+
+	sdio_pwrseq: sdio-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_enable_h>;
+		reset-gpios = <&gpio0 RK_PA2 GPIO_ACTIVE_LOW>;
 	};
 
 	vcc5v0_sys: regulator-vcc5v0-sys {
@@ -225,6 +271,12 @@
 			rockchip,pins = <0 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
+
+	sdio-pwrseq {
+		wifi_enable_h: wifi-enable-h {
+			rockchip,pins = <0 RK_PA2 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
 };
 
 &pmu_io_domains {
@@ -237,11 +289,27 @@
 	status = "okay";
 };
 
+&saradc {
+	vref-supply = <&vcc1v8_soc>;
+	status = "okay";
+};
+
+&sdio {
+	cap-sd-highspeed;
+	cap-sdio-irq;
+	keep-power-in-suspend;
+	mmc-pwrseq = <&sdio_pwrseq>;
+	non-removable;
+	sd-uhs-sdr104;
+	status = "okay";
+};
+
 &tsadc {
 	status = "okay";
 };
 
 &u2phy {
+	compatible = "rockchip,px30-usb2phy", "rockchip,rk3328-usb2phy";
 	status = "okay";
 
 	u2phy_otg: otg-port {
@@ -254,6 +322,6 @@
 };
 
 &usb20_otg {
-	dr_mode = "peripheral";
+	dr_mode = "otg";
 	status = "okay";
 };

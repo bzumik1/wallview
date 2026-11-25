@@ -41,8 +41,22 @@ The cause of the kernel/USB failure is still unknown, because there is no consol
 5. From the Mac: `rkdeveloptool wl 32768 misc-zero-restore.img` (32 KiB of zeros), restore `recovery` from the backup, `rkdeveloptool rd`.
 6. The panel boots the original Android; the BOOT button works again.
 
+## Update 2026-11-25: root cause
+
+Later analysis and tests on a second unit (see the [test log](test-log.md)) showed that the missing `adc-keys` was only one of the problems:
+
+1. The vendor U-Boot chooses the DTB in `board_init`, before the BOOT key is checked. With the BCB set, it ran on our mainline DTB.
+2. The vendor U-Boot **hangs on a mainline DTB** (reproduced on unit 2 with a one-shot reboot-mode test, without any persistent write). So on panel 1 our kernel probably never even started; the "kernel/USB failure" was U-Boot.
+3. Even with `adc-keys`, BOOT + PC would not have given Loader mode: the vendor USB PHY driver does not know `rockchip,px30-usb2phy`, so VBUS detection fails and the key means "recovery" instead of "download".
+
+The UART procedure above is still the way to recover panel 1, provided U-Boot reaches its autoboot prompt before hanging. If it does not, MaskROM is the only option.
+
+The safe way to boot test images is described in the [bring-up guide](bring-up-guide.md): BOOT + phone charger boots `recovery` once while U-Boot stays on the vendor DTB.
+
 ## Lessons
 
 - Every DTB booted through the vendor U-Boot must contain `saradc` and `adc-keys` with the download ("volume up") key, so the BOOT button keeps working.
 - Do not do blind boot experiments without a serial console. The plan's test station requires a USB-UART adapter for exactly this reason.
 - Prefer a recovery path that does not depend on the image under test, for example the BCB `bootonce-bootloader` or a watchdog that clears `misc`.
+- Never write state that makes the vendor U-Boot select our image by itself (BCB in `misc`). Use one-shot paths (BOOT + charger) and test every risky step without persistent state first.
+- Have an independent review before any eMMC write that could remove the way back.

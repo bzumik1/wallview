@@ -5,44 +5,193 @@ mkdir -p /proc /sys /dev /tmp /run
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
+exec </dev/console >/dev/console 2>&1
 mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts
 mount -t configfs configfs /sys/kernel/config
+mount -t debugfs debugfs /sys/kernel/debug
+
+MARKER_SECTOR=2047
+MARKER=WALLVIEW-RBTEST
+LOG_SLOT_SECTORS=2048
+REBOOT_MODE_REG=0xff010200
+BOOT_RECOVERY=0x5242C303
+gadget=/sys/kernel/config/usb_gadget/wallview
+
+find_misc() {
+	for uevent in /sys/class/block/*/uevent; do
+		grep -qx "PARTNAME=misc" "$uevent" && sed -n 's/^DEVNAME=//p' "$uevent"
+	done
+}
+
+misc=""
+for attempt in $(seq 1 60); do
+	misc=$(find_misc | head -n 1)
+	[ -n "$misc" ] && break
+	sleep 0.5
+done
+
+bcb_status="misc not found"
+marker_found=no
+if [ -n "$misc" ]; then
+	if dd if=/dev/zero of="/dev/$misc" bs=512 count=64 conv=fsync 2>/dev/null; then
+		bcb_status="cleared /dev/$misc"
+	else
+		bcb_status="clear failed /dev/$misc"
+	fi
+	marker_read=$(dd if="/dev/$misc" bs=512 skip=$MARKER_SECTOR count=1 2>/dev/null | tr -d '\0')
+	if [ "$marker_read" = "$MARKER" ]; then
+		marker_found=yes
+		dd if=/dev/zero of="/dev/$misc" bs=512 seek=$MARKER_SECTOR count=1 conv=fsync 2>/dev/null
+	fi
+	sync
+fi
+
+reboot_test=no
+grep -qw "wallview.reboot_test=1" /proc/cmdline && reboot_test=yes
+
+if [ "$marker_found" = yes ]; then
+	stage=reboot-test-second-boot
+elif [ "$reboot_test" = yes ]; then
+	stage=reboot-test-first-boot
+else
+	stage=normal
+fi
 
 backlight=$(ls -d /sys/class/backlight/* 2>/dev/null | head -n 1)
-signal_init() {
+blink() {
 	[ -n "$backlight" ] || return
 	max=$(cat "$backlight/max_brightness")
-	for blink in 1 2 3; do
+	for count in $(seq 1 "$1"); do
 		echo 0 > "$backlight/brightness"
-		sleep 0.4
+		sleep "$2"
 		echo "$max" > "$backlight/brightness"
-		sleep 0.4
+		sleep "$2"
 	done
+}
+
+collect_basic() {
+	echo "WALLVIEW-LOG stage=$stage label=$1 uptime=$(cut -d' ' -f1 /proc/uptime)"
+	echo "bcb: $bcb_status"
+	echo "marker found: $marker_found"
+	echo "--- cmdline"
+	cat /proc/cmdline
+	echo "--- dmesg"
+	dmesg
+}
+
+collect_full() {
+	collect_basic "$1"
+	echo "--- extcon"
+	for extcon in /sys/class/extcon/*; do
+		[ -e "$extcon" ] || continue
+		echo "$extcon $(cat "$extcon/name" 2>/dev/null)"
+		cat "$extcon/state" 2>/dev/null
+	done
+	echo "--- udc"
+	for udc_dir in /sys/class/udc/*; do
+		[ -e "$udc_dir" ] || continue
+		echo "$udc_dir state=$(cat "$udc_dir/state" 2>/dev/null)"
+	done
+	echo "gadget UDC: $(cat "$gadget/UDC" 2>&1)"
+	echo "rebinds: $(cat /tmp/rebinds 2>/dev/null || echo 0)"
+	echo "--- dwc2 debugfs"
+	for file in dr_mode params; do
+		echo "## $file"
+		cat "/sys/kernel/debug/usb/ff300000.usb/$file" 2>&1
+	done
+	echo "--- clocks"
+	grep -iE "usb|otg|utmi|480m" /sys/kernel/debug/clk/clk_summary 2>&1
+	echo "--- registers"
+	for address in 0xff2c0100 0xff2c0108 0xff2c0120 $REBOOT_MODE_REG; do
+		echo "$address $(devmem "$address" 32 2>&1)"
+	done
+	echo "--- network"
+	ip addr 2>&1
+	ip route 2>&1
+	echo "wlan0 ip: $(cat /run/wlan0.ip 2>/dev/null)"
+	wpa_cli -p /run/wpa_supplicant -i wlan0 status 2>&1
+	echo "--- dropbear"
+	cat /tmp/dropbear.log 2>/dev/null
 }
 
 save_log() {
-	misc=""
-	for uevent in /sys/class/block/*/uevent; do
-		grep -qx "PARTNAME=misc" "$uevent" && misc=$(sed -n 's/^DEVNAME=//p' "$uevent")
-	done
 	[ -n "$misc" ] || return
-	{
-		echo "WALLVIEW-LOG $1"
-		dmesg
-		echo "--- udc"
-		ls /sys/class/udc
-		echo "--- gadget UDC"
-		cat "$gadget/UDC" 2>&1
-	} > /tmp/wallview.log
-	dd if=/dev/zero of="/dev/$misc" bs=512 seek=2048 count=2048 2>/dev/null
-	dd if=/tmp/wallview.log of="/dev/$misc" bs=512 seek=2048 count=2048 2>/dev/null
+	seek=$(($3 * LOG_SLOT_SECTORS))
+	"collect_$1" "$2" > "/tmp/log-$3"
+	dd if=/dev/zero of="/dev/$misc" bs=512 seek=$seek count=$LOG_SLOT_SECTORS conv=fsync 2>/dev/null
+	dd if="/tmp/log-$3" of="/dev/$misc" bs=512 seek=$seek count=$LOG_SLOT_SECTORS conv=fsync 2>/dev/null
 	sync
 }
 
-signal_init
+host_connected() {
+	for state in /sys/class/extcon/*/state; do
+		[ -e "$state" ] || continue
+		grep -qE "^(SDP|CDP)=1" "$state" && return 0
+	done
+	return 1
+}
 
-gadget=/sys/kernel/config/usb_gadget/wallview
+usb_watch() {
+	rebinds=0
+	misses=0
+	signaled=no
+	while true; do
+		sleep 3
+		host_connected || { misses=0; continue; }
+		if [ "$(cat "/sys/class/udc/$udc/state" 2>/dev/null)" = configured ]; then
+			misses=0
+			[ "$signaled" = yes ] || { signaled=yes; blink 5 0.15; }
+			continue
+		fi
+		misses=$((misses + 1))
+		[ "$misses" -ge 2 ] || continue
+		[ "$rebinds" -lt 5 ] || continue
+		echo "" > "$gadget/UDC"
+		sleep 0.5
+		echo "$udc" > "$gadget/UDC"
+		rebinds=$((rebinds + 1))
+		echo "$rebinds" > /tmp/rebinds
+		misses=0
+	done
+}
+
+start_wifi() {
+	[ -f /etc/wpa_supplicant.conf ] || return
+	for attempt in $(seq 1 60); do
+		[ -e /sys/class/net/wlan0 ] && break
+		sleep 0.5
+	done
+	[ -e /sys/class/net/wlan0 ] || return
+	mkdir -p /run/wpa_supplicant /etc/dropbear /var/run
+	ip link set wlan0 up
+	wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf
+	udhcpc -i wlan0 -b -x hostname:wallview -s /etc/udhcpc.script -p /run/udhcpc.pid
+	dropbear -R -E -s 2> /tmp/dropbear.log
+	for attempt in $(seq 1 60); do
+		[ -s /run/wlan0.ip ] && { blink 2 1; return; }
+		sleep 1
+	done
+}
+
+blink 3 0.4
+
+case "$stage" in
+reboot-test-first-boot)
+	save_log basic before-reboot 1
+	printf '%s' "$MARKER" | dd of="/dev/$misc" bs=512 seek=$MARKER_SECTOR count=1 conv=sync,fsync 2>/dev/null
+	sync
+	devmem $REBOOT_MODE_REG 32 $BOOT_RECOVERY
+	echo b > /proc/sysrq-trigger
+	;;
+reboot-test-second-boot)
+	save_log basic start 2
+	;;
+*)
+	save_log basic start 1
+	;;
+esac
+
 mkdir -p "$gadget"
 echo 0x1d6b > "$gadget/idVendor"
 echo 0x0104 > "$gadget/idProduct"
@@ -56,6 +205,7 @@ mkdir -p "$gadget/functions/acm.usb0" "$gadget/functions/ncm.usb0"
 ln -s "$gadget/functions/acm.usb0" "$gadget/configs/c.1/"
 ln -s "$gadget/functions/ncm.usb0" "$gadget/configs/c.1/"
 
+udc=""
 for attempt in $(seq 1 60); do
 	udc=$(ls /sys/class/udc 2>/dev/null | head -n 1)
 	[ -n "$udc" ] && break
@@ -65,10 +215,15 @@ echo "$udc" > "$gadget/UDC"
 
 sleep 1
 ifconfig usb0 192.168.7.2 netmask 255.255.255.0 up
-telnetd -l /bin/sh
+telnetd -b 192.168.7.2 -l /bin/sh
+usb_watch &
+start_wifi &
 
-save_log early
-(sleep 15 && save_log late) &
+if [ "$stage" = reboot-test-second-boot ]; then
+	(sleep 20 && save_log full t20 3) &
+else
+	(sleep 15 && save_log full t15 2; sleep 40 && save_log full t60 3) &
+fi
 
 while true; do
 	setsid getty -n -l /bin/sh 0 ttyGS0 vt100
