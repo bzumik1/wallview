@@ -22,7 +22,7 @@ Read the [vendor U-Boot notes](phase0-findings.md#vendor-u-boot-behaviour) and t
 
 The third row is the whole trick. U-Boot decides "download" vs "recovery" from the BOOT key and the USB charger type: with a PC (SDP/CDP) it enters rockusb, with a charger (DCP) it sets `reboot_mode=recovery` for this boot only. Nothing persistent is written, so the next normal power-up is Android again and BOOT + PC is always Loader mode.
 
-Never put BCB `boot-recovery` into `misc` for a mainline image: then U-Boot itself runs on our mainline DTB, and that hangs (see the [test log](test-log.md)).
+U-Boot must never run on our mainline DTB: it hangs (see the [test log](test-log.md)). That is why the image in `recovery` carries the **vendor** DTB in its `RSCE` resource and our DTB inside the initramfs (see [two-stage boot](#two-stage-boot) below). With this layout U-Boot behaves exactly as when it boots Android, also when it selects `recovery` by itself.
 
 ## Step 1: full backup
 
@@ -134,13 +134,64 @@ How the DTB is passed:
 
 If a new kernel does not come back, unplug and repeat step 4: the image in `recovery` still has working Wi-Fi.
 
+## Step 7: autoboot and assembly
+
+Do this while the panel is still open.
+
+1. Make sure both slots hold an image that boots with Wi-Fi: `install-panel.sh <ip> primary`, reboot, check, `install-panel.sh <ip> golden`.
+2. On the panel: `wallview-boot linux`.
+3. Unplug and plug the charger **without** BOOT. The panel must come up with display and Wi-Fi on its own.
+4. Hold BOOT and plug into the PC: `rkdeveloptool ld` must show `Loader`. With the vendor DTB in `recovery` U-Boot still sees the button and the USB PHY.
+5. Unplug, assemble, connect mains. From now on everything is done over Wi-Fi; to go back to Android run `wallview-boot android` and reboot.
+
+## Two-stage boot
+
+Every boot of the image in `recovery` goes through two stages, both using the same kernel and initramfs:
+
+1. **Loader.** U-Boot passes the vendor DTB (from `RSCE` block 13). Our kernel boots with it far enough to run `init`, which sees model `Rockchip PX30 evb ddr3 board` instead of `Sonoff NSPanel Pro` and acts as a loader: it reads kernel, ramdisk and command line of an image slot from the eMMC (Android boot image header), adds `wallview.slot=<slot>` and starts it with `kexec -c` and our DTB (`/boot/wallview.dtb`). Our DTS contains the `/memory` node with the same ranges the vendor U-Boot reports, which `kexec_load` needs.
+2. **WallView.** The same kernel boots again, now with our DTB: display, Wi-Fi, SSH.
+
+## Autoboot, slots and fallbacks
+
+For an assembled panel (no BOOT button, no USB, mains power) the BCB `boot-recovery` is written to `misc`; U-Boot then selects `recovery` on every power-up, still running on the vendor DTB.
+
+| Slot | Partition | Purpose |
+|---|---|---|
+| `primary` | `recovery` (64 MB) | current image |
+| `golden` | `backup` (112 MB, unused by the stock firmware, all zeros on both units) | last image known to boot with Wi-Fi |
+
+The loader keeps a boot counter in `misc` sector 2046 (`WALLVIEW-TRIES=<n>`):
+
+| Counter after increment | Loader boots |
+|---|---|
+| 1–2 | `primary` |
+| 3–4 | `golden` |
+| 5 or more | nothing: clears the BCB and reboots into Android |
+
+The loader starts the hardware watchdog (`dw_wdt`, cannot be stopped once running) before jumping. The kernel keeps it alive for at most 180 s (`watchdog.open_timeout=180`); WallView takes it over with the busybox `watchdog` daemon only after Wi-Fi has an address. A kernel hang, a panic (`panic=5`) or a boot without network therefore ends in a reset, which counts as a failed try. After 60 s of healthy running in the `primary` slot the counter is reset to 0. A `golden` boot leaves the counter alone, so the panel stays on `golden` until the counter is reset.
+
+Commands on the panel (`wallview-boot`):
+
+| Command | Effect |
+|---|---|
+| `wallview-boot status` | show BCB and counter |
+| `wallview-boot linux` | write BCB `boot-recovery` (autoboot WallView) |
+| `wallview-boot android` | clear BCB (next boot is Android) |
+| `wallview-boot reset` | counter to 0 |
+| `wallview-boot install <primary\|golden> <image> <sha256>` | write an image to a slot and verify it by reading back |
+
+From the Mac, `tools/install-panel.sh <panel-ip> <primary|golden>` uploads `out/recovery-wallview.img` and runs `wallview-boot install`. Only install to `golden` an image that has booted with Wi-Fi from `primary`.
+
+Update procedure: build, test with `kexec-panel.sh`, `install-panel.sh <ip> primary`, reboot, check, and only then `install-panel.sh <ip> golden`.
+
 ## Logs without a network
 
-`init` stores logs in unused space of `misc` (it never touches the BCB area except to clear it):
+`init` stores logs in unused space of `misc` (it never touches the BCB area; only `wallview-boot` and the loader fallback do):
 
 | `misc` sectors | Content |
 |---|---|
-| 0–63 | BCB, cleared by `init` at every boot |
+| 0–63 | BCB (`boot-recovery` at offsets 0 and 16 KiB) |
+| 2046 | boot counter (`WALLVIEW-TRIES=<n>`) |
 | 2047 | marker for the one-shot reboot test (`WALLVIEW-RBTEST`) |
 | 2048–4095 | log slot 1: basic log at start |
 | 4096–6143 | log slot 2: full log after 15 s |

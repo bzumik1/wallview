@@ -9,11 +9,11 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 cp "$NEW" "$work/merged.dtb"
-memory_nodes=$(fdtget -l "$RUNNING" / | grep -E '^memory(@|$)' || true)
+memory_nodes=$(dtc -q -I dtb -O dts "$RUNNING" | sed -n 's/^\t\(memory\(@[0-9a-f]*\)\{0,1\}\) {$/\1/p')
 [ -n "$memory_nodes" ] || { echo "no memory node in $RUNNING" >&2; exit 1; }
 
 for node in $memory_nodes; do
-	fdtget -l "$work/merged.dtb" / | grep -qx "$node" || fdtput -c "$work/merged.dtb" "/$node"
+	fdtget "$work/merged.dtb" "/$node" device_type >/dev/null 2>&1 || fdtput -c "$work/merged.dtb" "/$node"
 	fdtput -t s "$work/merged.dtb" "/$node" device_type memory
 	fdtput -t x "$work/merged.dtb" "/$node" reg $(fdtget -t x "$RUNNING" "/$node" reg)
 done

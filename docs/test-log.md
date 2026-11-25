@@ -60,3 +60,11 @@ Goal: find out whether the BCB path (U-Boot running on our DTB) is safe, without
 - First try: DRM up, `card0-DSI-1` connected, panel answers DCS reads (power mode `0x9c`: sleep out, display on), DSI PHY locked and streaming, but the screen stayed black. "All pixels on" (`0x23`) showed white, so the panel itself worked.
 - Fix: `MIPI_DSI_CLOCK_NON_CONTINUOUS`, as all mainline ST7701 panels use. With a continuous HS clock the panel ignores the video stream.
 - Result: Linux text console on the panel, RGB test pattern with correct colour order.
+
+## 2026-11-25 – panel 2: two-stage boot with the vendor DTB
+
+- Image layout: vendor DTB in the `RSCE` resource (compiled from `reference/vendor/…-vendor.dts`; identical to the original after decompilation, same size), our DTB in the initramfs.
+- Test 1, no eMMC write: `kexec` into our kernel with the vendor DTB. The kernel booted, `init` detected the vendor model, loaded the image from `recovery` and started it with `kexec -c` and our DTB. Back on Wi-Fi after 11 s. Using our full kernel with the vendor DTB works, no separate loader kernel needed.
+- Test 2, the path an assembled panel uses: new image written to `recovery` over SSH (`wallview-boot install`, readback verified). Reboot-mode register set to recovery (`0xff010200 = 0x5242C303`) and `sysrq b` from a kernel without `system-power-controller` (a PMIC restart would clear the register). **U-Boot selected `recovery` by itself, ran on the vendor DTB, the loader started the `primary` slot**; display and Wi-Fi up 41 s after the reboot. Boot counter 1, reset to 0 after 60 s.
+- Test 3: same image written to `backup` (`golden`). Counter set to 2, same reboot: the loader counted 3 and **started the `golden` slot**. Counter reset afterwards.
+- Not tested yet: the Android fallback after 5 tries, a watchdog-triggered reset, and a cold power-up with the BCB in `misc` (planned with the panel still open).

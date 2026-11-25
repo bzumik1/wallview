@@ -6,12 +6,12 @@ WallView is not affiliated with ITEAD/Sonoff or the Open Home Foundation. "for N
 
 ## Status
 
-Mainline Linux 6.18 boots on an NSPanel Pro 86 (Gen1) with the original bootloader, without a serial console and without changing anything but the `recovery` partition. The display, Wi-Fi and SSH work; new kernels are started over the network with `kexec`. The first development unit is still stuck from an earlier experiment (see the incident report).
+Mainline Linux 6.18 boots on an NSPanel Pro 86 (Gen1) with the original bootloader and without a serial console; only the `recovery`, `backup` and `misc` partitions are used. The display, Wi-Fi and SSH work, the panel can boot into WallView on its own with a fallback image and a watchdog, and new kernels are started over the network with `kexec`. The first development unit is still stuck from an earlier experiment (see the incident report).
 
 | Phase | State |
 |---|---|
 | 0 · Preparation | done: backups of two units, hardware mapped from the vendor DTS, board test points measured |
-| 1 · Bootloader and kernel | in progress: kernel, eMMC, PMIC, backlight, display, Wi-Fi, SSH, kexec work; touch and USB gadget next; vendor U-Boot kept |
+| 1 · Bootloader and kernel | in progress: kernel, eMMC, PMIC, backlight, display, Wi-Fi, SSH, kexec, two-stage autoboot with fallback slot and watchdog work; touch, sensors, audio next; vendor U-Boot kept |
 | 2–9 | not started |
 
 ## Documentation

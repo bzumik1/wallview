@@ -5,7 +5,7 @@ PANEL=${1:?usage: kexec-panel.sh <panel-ip>}
 WALLVIEW=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$WALLVIEW/out
 DTB=${DTB:-$OUT/px30-itead-nspanel-pro.dtb}
-CMDLINE="console=ttyS2,1500000n8 console=tty0 earlycon=uart8250,mmio32,0xff160000 rdinit=/init loglevel=7 ignore_loglevel panic=5"
+CMDLINE=$(dd if="$OUT/recovery-wallview.img" bs=1 skip=64 count=512 2>/dev/null | tr -d '\0')
 SSH_OPTIONS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10)
 
 panel() {

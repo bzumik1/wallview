@@ -6,7 +6,7 @@ LINUX=$HOME/src/linux
 OUT=$WALLVIEW/out
 DTS_NAME=px30-itead-nspanel-pro
 ROCKCHIP_DTS=$LINUX/arch/arm64/boot/dts/rockchip
-CMDLINE="console=ttyS2,1500000n8 console=tty0 earlycon=uart8250,mmio32,0xff160000 rdinit=/init loglevel=7 ignore_loglevel panic=5 ${WALLVIEW_EXTRA_CMDLINE:-}"
+CMDLINE="console=ttyS2,1500000n8 console=tty0 earlycon=uart8250,mmio32,0xff160000 rdinit=/init loglevel=7 ignore_loglevel panic=5 watchdog.open_timeout=180 ${WALLVIEW_EXTRA_CMDLINE:-}"
 
 mkdir -p "$OUT"
 
@@ -26,12 +26,15 @@ make -C "$LINUX" -s olddefconfig
 make -C "$LINUX" -j"$(nproc)" -s Image "rockchip/$DTS_NAME.dtb"
 cp "$LINUX/arch/arm64/boot/Image" "$OUT/Image"
 cp "$ROCKCHIP_DTS/$DTS_NAME.dtb" "$OUT/$DTS_NAME.dtb"
+dtc -q -I dts -O dtb -o "$OUT/vendor.dtb" "$WALLVIEW/reference/vendor/px30-evb-ddr3-v10-nspanel-pro-86-vendor.dts"
 
 rootfs=$(mktemp -d)
 trap 'rm -rf "$rootfs"' EXIT
 mkdir -p "$rootfs/bin"
 cp /bin/busybox "$rootfs/bin/busybox"
 install -m 0755 "$WALLVIEW/initramfs/init" "$rootfs/init"
+install -m 0755 "$WALLVIEW/initramfs/wallview-boot" "$rootfs/bin/wallview-boot"
+install -D -m 0644 "$OUT/$DTS_NAME.dtb" "$rootfs/boot/wallview.dtb"
 
 copy_with_libs() {
 	install -D -m 0755 "$1" "$rootfs$1"
@@ -63,7 +66,7 @@ fi
 python3 -I "$WALLVIEW/tools/mkbootimg.py" \
 	--kernel "$OUT/Image" \
 	--ramdisk "$OUT/initramfs.cpio.gz" \
-	--dtb "$OUT/$DTS_NAME.dtb" \
+	--dtb "$OUT/vendor.dtb" \
 	--cmdline "$CMDLINE" \
 	--output "$OUT/recovery-wallview.img"
 

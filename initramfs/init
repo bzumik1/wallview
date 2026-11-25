@@ -18,27 +18,50 @@ REBOOT_MODE_REG=0xff010200
 BOOT_RECOVERY=0x5242C303
 gadget=/sys/kernel/config/usb_gadget/wallview
 
-find_misc() {
+find_partition() {
 	for uevent in /sys/class/block/*/uevent; do
-		grep -qx "PARTNAME=misc" "$uevent" && sed -n 's/^DEVNAME=//p' "$uevent"
+		grep -qx "PARTNAME=$1" "$uevent" && sed -n 's/^DEVNAME=//p' "$uevent"
 	done
 }
 
 misc=""
+recovery=""
+golden=""
 for attempt in $(seq 1 60); do
-	misc=$(find_misc | head -n 1)
-	[ -n "$misc" ] && break
+	misc=$(find_partition misc | head -n 1)
+	recovery=$(find_partition recovery | head -n 1)
+	golden=$(find_partition backup | head -n 1)
+	[ -n "$misc" ] && [ -n "$recovery" ] && [ -n "$golden" ] && break
 	sleep 0.5
 done
+
+TRIES_SECTOR=2046
+TRIES_PREFIX=WALLVIEW-TRIES=
+MAX_PRIMARY_TRIES=2
+MAX_GOLDEN_TRIES=4
+slot=$(sed -n 's/.*wallview\.slot=\([a-z]*\).*/\1/p' /proc/cmdline)
+
+read_tries() {
+	value=$(dd if="/dev/$misc" bs=512 skip=$TRIES_SECTOR count=1 2>/dev/null | tr -d '\0')
+	case "$value" in
+	"$TRIES_PREFIX"[0-9]*) echo "${value#"$TRIES_PREFIX"}" ;;
+	*) echo 0 ;;
+	esac
+}
+
+write_tries() {
+	printf '%s%s' "$TRIES_PREFIX" "$1" | dd of="/dev/$misc" bs=512 seek=$TRIES_SECTOR count=1 conv=sync,fsync 2>/dev/null
+	sync
+}
+
+start_watchdog() {
+	[ -e /dev/watchdog ] && watchdog -T 30 -t 5 /dev/watchdog
+}
 
 bcb_status="misc not found"
 marker_found=no
 if [ -n "$misc" ]; then
-	if dd if=/dev/zero of="/dev/$misc" bs=512 count=64 conv=fsync 2>/dev/null; then
-		bcb_status="cleared /dev/$misc"
-	else
-		bcb_status="clear failed /dev/$misc"
-	fi
+	bcb_status="command '$(dd if="/dev/$misc" bs=32 count=1 2>/dev/null | tr -d '\0')'"
 	marker_read=$(dd if="/dev/$misc" bs=512 skip=$MARKER_SECTOR count=1 2>/dev/null | tr -d '\0')
 	if [ "$marker_read" = "$MARKER" ]; then
 		marker_found=yes
@@ -50,7 +73,11 @@ fi
 reboot_test=no
 grep -qw "wallview.reboot_test=1" /proc/cmdline && reboot_test=yes
 
-if [ "$marker_found" = yes ]; then
+model=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)
+
+if [ "$model" != "Sonoff NSPanel Pro" ]; then
+	stage=loader
+elif [ "$marker_found" = yes ]; then
 	stage=reboot-test-second-boot
 elif [ "$reboot_test" = yes ]; then
 	stage=reboot-test-first-boot
@@ -74,6 +101,7 @@ collect_basic() {
 	echo "WALLVIEW-LOG stage=$stage label=$1 uptime=$(cut -d' ' -f1 /proc/uptime)"
 	echo "bcb: $bcb_status"
 	echo "marker found: $marker_found"
+	echo "slot: ${slot:-none} tries: $(read_tries)"
 	echo "--- cmdline"
 	cat /proc/cmdline
 	echo "--- dmesg"
@@ -169,10 +197,52 @@ start_wifi() {
 	udhcpc -i wlan0 -b -x hostname:wallview -s /etc/udhcpc.script -p /run/udhcpc.pid
 	dropbear -R -E -s 2> /tmp/dropbear.log
 	for attempt in $(seq 1 60); do
-		[ -s /run/wlan0.ip ] && { blink 2 1; return; }
+		if [ -s /run/wlan0.ip ]; then
+			start_watchdog
+			[ "$slot" = primary ] && (sleep 60 && write_tries 0) &
+			blink 2 1
+			return
+		fi
 		sleep 1
 	done
 }
+
+partition_u32() {
+	od -An -t u4 -j "$2" -N 4 "/dev/$1" | tr -d ' '
+}
+
+load_image() {
+	partition=$1
+	[ -n "$partition" ] || return 1
+	[ "$(dd if="/dev/$partition" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] || return 1
+	kernel_size=$(partition_u32 "$partition" 8)
+	ramdisk_size=$(partition_u32 "$partition" 16)
+	page_size=$(partition_u32 "$partition" 36)
+	[ "$page_size" = 2048 ] || return 1
+	kernel_pages=$(((kernel_size + page_size - 1) / page_size))
+	ramdisk_pages=$(((ramdisk_size + page_size - 1) / page_size))
+	dd if="/dev/$partition" bs="$page_size" skip=1 count="$kernel_pages" 2>/dev/null | head -c "$kernel_size" > /tmp/Image
+	dd if="/dev/$partition" bs="$page_size" skip=$((1 + kernel_pages)) count="$ramdisk_pages" 2>/dev/null | head -c "$ramdisk_size" > /tmp/initrd
+	cmdline="$(dd if="/dev/$partition" bs=1 skip=64 count=512 2>/dev/null | tr -d '\0') wallview.slot=$2"
+	kexec -c -l /tmp/Image --initrd=/tmp/initrd --dtb=/boot/wallview.dtb --command-line="$cmdline"
+}
+
+if [ "$stage" = loader ]; then
+	tries=$(($(read_tries) + 1))
+	write_tries "$tries"
+	save_log basic "loader-tries-$tries" 1
+	start_watchdog
+	if [ "$tries" -le "$MAX_PRIMARY_TRIES" ]; then
+		load_image "$recovery" primary && kexec -e
+	fi
+	if [ "$tries" -le "$MAX_GOLDEN_TRIES" ]; then
+		load_image "$golden" golden && kexec -e
+	fi
+	save_log basic loader-fallback-android 1
+	dd if=/dev/zero of="/dev/$misc" bs=512 count=64 conv=fsync 2>/dev/null
+	sync
+	reboot -f
+fi
 
 blink 3 0.4
 
