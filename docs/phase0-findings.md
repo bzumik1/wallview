@@ -86,6 +86,19 @@ Extracted from the `resource` partition (also embedded in `boot`) and decompiled
 - BOOT button: `adc-keys` on SARADC channel 2. The "volume up" key (press threshold 17 000 µV, key-up 1 800 000 µV) is what U-Boot treats as the download key.
 - Wi-Fi power: `mmc-pwrseq-simple` with `reset-gpios = GPIO0_A2` active low (same as mainline `px30-evb`), SDIO controller `ff380000`, host wake GPIO0_A5. RK809 clkout2 is assigned to Bluetooth.
 
+### Buses and peripherals (verified on the running mainline kernel)
+
+| Bus | Address / port | Device | Mainline |
+|---|---|---|---|
+| I2C0 | 0x20 | RK809 PMIC + codec | `rk808`, `rk817` codec |
+| I2C1 | 0x5a | Hynitron CST226SE touch controller (IRQ GPIO0_B5, reset GPIO0_B4 active low) | `hynitron_cstxxx` + our patch |
+| I2C2 | 0x47 | Sensortek light/proximity, chip id 0x5f (IRQ GPIO3_C0) | `stk3310` |
+| I2C2 | 0x3c, 0x3d | `smatek` device (vendor node `smatek,tp`), unknown | – |
+| UART5 (`ttyS1`) | 115200, no RTS/CTS | Zigbee SM-044 (EFR32MG21), EZSP NCP | – |
+| UART2 | 1500000 | debug console | – |
+| SDIO | – | RTL8723DS Wi-Fi | `rtw88_8723ds` |
+| I2S1 + PDM | – | RK809 codec: speaker, differential analog microphone | `rk817` codec |
+
 ### Display (ST7701S over DSI)
 
 - `simple-panel-dsi`, 2 lanes, `dsi,format = 0` (RGB888), `dsi,flags = 0x803`.

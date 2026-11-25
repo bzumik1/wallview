@@ -1,0 +1,45 @@
+diff --git a/Documentation/devicetree/bindings/input/touchscreen/hynitron,cstxxx.yaml b/Documentation/devicetree/bindings/input/touchscreen/hynitron,cstxxx.yaml
+index 9cb5d4af0..c68418623 100644
+--- a/Documentation/devicetree/bindings/input/touchscreen/hynitron,cstxxx.yaml
++++ b/Documentation/devicetree/bindings/input/touchscreen/hynitron,cstxxx.yaml
+@@ -19,6 +19,7 @@ allOf:
+ properties:
+   compatible:
+     enum:
++      - hynitron,cst226se
+       - hynitron,cst340
+ 
+   reg:
+diff --git a/drivers/input/touchscreen/hynitron_cstxxx.c b/drivers/input/touchscreen/hynitron_cstxxx.c
+index af66d9184..20974e461 100644
+--- a/drivers/input/touchscreen/hynitron_cstxxx.c
++++ b/drivers/input/touchscreen/hynitron_cstxxx.c
+@@ -476,6 +476,20 @@ static const struct hynitron_ts_chip_data cst3xx_data = {
+ 	.report_touch		= &cst3xx_touch_report,
+ };
+ 
++static int cst226se_bootloader_enter(struct i2c_client *client)
++{
++	return 0;
++}
++
++static const struct hynitron_ts_chip_data cst226se_data = {
++	.max_touch_num		= 5,
++	.ic_chkcode		= 0xcaca0000,
++	.firmware_info		= &cst3xx_firmware_info,
++	.bootloader_enter	= &cst226se_bootloader_enter,
++	.init_input		= &cst3xx_input_dev_int,
++	.report_touch		= &cst3xx_touch_report,
++};
++
+ static const struct i2c_device_id hyn_tpd_id[] = {
+ 	{ .name = "hynitron_ts" },
+ 	{ /* sentinel */ },
+@@ -483,6 +497,7 @@ static const struct i2c_device_id hyn_tpd_id[] = {
+ MODULE_DEVICE_TABLE(i2c, hyn_tpd_id);
+ 
+ static const struct of_device_id hyn_dt_match[] = {
++	{ .compatible = "hynitron,cst226se", .data = &cst226se_data },
+ 	{ .compatible = "hynitron,cst340", .data = &cst3xx_data },
+ 	{ /* sentinel */ },
+ };

@@ -300,6 +300,36 @@
 	};
 };
 
+&i2c1 {
+	status = "okay";
+
+	touchscreen@5a {
+		compatible = "hynitron,cst226se";
+		reg = <0x5a>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PB5 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&touch_int>;
+		reset-gpios = <&gpio0 RK_PB4 GPIO_ACTIVE_LOW>;
+		touchscreen-size-x = <480>;
+		touchscreen-size-y = <480>;
+	};
+};
+
+&i2c2 {
+	clock-frequency = <100000>;
+	i2c-scl-falling-time-ns = <50>;
+	i2c-scl-rising-time-ns = <300>;
+	status = "okay";
+
+	light-sensor@47 {
+		compatible = "sensortek,stk3310";
+		reg = <0x47>;
+		interrupt-parent = <&gpio3>;
+		interrupts = <RK_PC0 IRQ_TYPE_EDGE_FALLING>;
+	};
+};
+
 &io_domains {
 	vccio1-supply = <&vcc1v8_soc>;
 	vccio2-supply = <&vccio_sd>;
@@ -313,6 +343,12 @@
 	pmic {
 		pmic_int: pmic-int {
 			rockchip,pins = <0 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	touchscreen {
+		touch_int: touch-int {
+			rockchip,pins = <0 RK_PB5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -362,6 +398,14 @@
 };
 
 &uart2 {
+	status = "okay";
+};
+
+&uart4 {
+	status = "okay";
+};
+
+&uart5 {
 	status = "okay";
 };
 
