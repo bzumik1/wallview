@@ -111,3 +111,10 @@ Tests:
 - Thermal: `ROCKCHIP_THERMAL` built in, zones `soc-thermal` and `gpu-thermal` (about 40 °C idle), hardware shutdown at 120 °C via CRU reset (vendor value, mainline default).
 - GPU: Panfrost finds Mali-G31 (`0x7093`), `/dev/dri/renderD128`. Only the 480 MHz OPP is usable because `vdd_log` has the vendor minimum of 1.1 V.
 - After installing the new `primary`, the GPU was missing: the loader passed its own (older) DTB. The loader now extracts `boot/wallview.dtb` from the slot's ramdisk. Tested first without writing anything by `kexec` into the new kernel with a vendor DTB whose watchdog node was enabled (so that the loader stage feeds the running watchdog), then installed as `loader` and `primary`: reboot through the new loader in 36 s, GPU present. The previous loader is saved locally in `out-saved/`.
+
+## 2026-11-26 – panel 2: Bluetooth, stable serial port numbers
+
+- `realtek,rtl8723ds-bt` on UART1 with RTS/CTS; RK809 now exposes two clock outputs and `clkout2` (32 kHz) is enabled through `sdio-pwrseq` (`ext_clock`), as in the vendor DTS. Wi-Fi unaffected.
+- `BT_HCIUART` stayed a module until `POWER_SEQUENCING` was built in (`depends on POWER_SEQUENCING || !POWER_SEQUENCING`).
+- linux-firmware has no `rtl8723ds_fw`/`rtl8723ds_config`; the files from the vendor partition (`/etc/firmware`) work: `hci0`, RTL8723D ROM v2, firmware `0xaa897e1b`. `Opcode 0x0c77 failed: -56` is a harmless unsupported optional command.
+- Serial aliases fix the numbering: `ttyS1` Bluetooth, `ttyS2` console, `ttyS4` UART4, `ttyS5` Zigbee (EZSP `RSTACK` confirmed again).

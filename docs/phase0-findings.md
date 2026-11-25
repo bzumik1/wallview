@@ -94,7 +94,8 @@ Extracted from the `resource` partition (also embedded in `boot`) and decompiled
 | I2C1 | 0x5a | Hynitron CST226SE touch controller (IRQ GPIO0_B5, reset GPIO0_B4 active low) | `hynitron_cstxxx` + our patch |
 | I2C2 | 0x47 | Sensortek light/proximity, chip id 0x5f (IRQ GPIO3_C0) | `stk3310` |
 | I2C2 | 0x3c, 0x3d | `smatek` device (vendor node `smatek,tp`), unknown | – |
-| UART5 (`ttyS1`) | 115200, no RTS/CTS | Zigbee SM-044 (EFR32MG21), EZSP NCP | – |
+| UART1 (`ttyS1`) | H5, RTS/CTS | RTL8723DS Bluetooth (enable GPIO0_C1, device wake GPIO0_A1, host wake GPIO0_B2, 32 kHz from RK809 clkout2) | `hci_uart` H5 + `btrtl`, firmware from the vendor partition |
+| UART5 (`ttyS5`) | 115200, no RTS/CTS | Zigbee SM-044 (EFR32MG21), EZSP NCP | – |
 | UART2 | 1500000 | debug console | – |
 | SDIO | – | RTL8723DS Wi-Fi | `rtw88_8723ds` |
 | I2S1 + PDM | – | RK809 codec: speaker, differential analog microphone | `rk817` codec |

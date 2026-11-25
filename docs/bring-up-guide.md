@@ -72,6 +72,17 @@ Local files (never committed, `local/` is in `.gitignore`):
 | `local/wifi/psk` | Wi-Fi password; the build stores only the derived PSK hash in the image |
 | `local/ssh/authorized_keys` | public SSH key(s) allowed to log in as root |
 
+| `local/firmware/` | extra firmware copied to `/lib/firmware` in the image (Bluetooth, see below) |
+
+Bluetooth firmware is not in linux-firmware for the RTL8723DS. Take it from your own backup (vendor partition, LBA 4538368, 786432 sectors):
+
+```
+dd if=nspanel-emmc-full.img of=vendor.img bs=512 skip=4538368 count=786432
+mkdir -p local/firmware/rtl_bt
+debugfs -R "dump /etc/firmware/rtl8723ds_fw local/firmware/rtl_bt/rtl8723ds_fw.bin" vendor.img
+debugfs -R "dump /etc/firmware/rtl8723ds_config local/firmware/rtl_bt/rtl8723ds_config.bin" vendor.img
+```
+
 Additional kernel command line options can be passed with `WALLVIEW_EXTRA_CMDLINE`.
 
 ## Step 3: write `recovery`

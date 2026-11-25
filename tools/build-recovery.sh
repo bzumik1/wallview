@@ -50,6 +50,11 @@ ln -s aplay "$rootfs/usr/bin/arecord"
 mkdir -p "$rootfs/usr/share/alsa"
 (cd /usr/share/alsa && tar -cf - --exclude=ucm2 --exclude=ucm .) | tar -xf - -C "$rootfs/usr/share/alsa"
 
+if [ -d "$WALLVIEW/local/firmware" ]; then
+	mkdir -p "$rootfs/lib/firmware"
+	cp -r "$WALLVIEW/local/firmware/." "$rootfs/lib/firmware/"
+fi
+
 WIFI_DIR=$WALLVIEW/local/wifi
 if [ -d "$WIFI_DIR" ]; then
 	install -D -m 0644 "$HOME/src/firmware/rtw88/rtw8723d_fw.bin" "$rootfs/lib/firmware/rtw88/rtw8723d_fw.bin"

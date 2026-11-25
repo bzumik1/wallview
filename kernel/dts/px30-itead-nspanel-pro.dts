@@ -51,6 +51,10 @@
 
 	aliases {
 		mmc0 = &emmc;
+		serial1 = &uart1;
+		serial2 = &uart2;
+		serial4 = &uart4;
+		serial5 = &uart5;
 	};
 
 	chosen {
@@ -71,6 +75,8 @@
 
 	sdio_pwrseq: sdio-pwrseq {
 		compatible = "mmc-pwrseq-simple";
+		clocks = <&rk809 1>;
+		clock-names = "ext_clock";
 		pinctrl-names = "default";
 		pinctrl-0 = <&wifi_enable_h>;
 		reset-gpios = <&gpio0 RK_PA2 GPIO_ACTIVE_LOW>;
@@ -183,8 +189,8 @@
 		pinctrl-0 = <&pmic_int>, <&i2s1_2ch_mclk>;
 		system-power-controller;
 		wakeup-source;
-		#clock-cells = <0>;
-		clock-output-names = "xin32k";
+		#clock-cells = <1>;
+		clock-output-names = "xin32k", "rk809-clkout2";
 		clocks = <&cru SCLK_I2S1_OUT>;
 		clock-names = "mclk";
 		#sound-dai-cells = <0>;
@@ -431,6 +437,18 @@
 
 	u2phy_otg: otg-port {
 		status = "okay";
+	};
+};
+
+&uart1 {
+	uart-has-rtscts;
+	status = "okay";
+
+	bluetooth {
+		compatible = "realtek,rtl8723ds-bt";
+		device-wake-gpios = <&gpio0 RK_PA1 GPIO_ACTIVE_HIGH>;
+		enable-gpios = <&gpio0 RK_PC1 GPIO_ACTIVE_HIGH>;
+		host-wake-gpios = <&gpio0 RK_PB2 GPIO_ACTIVE_HIGH>;
 	};
 };
 
