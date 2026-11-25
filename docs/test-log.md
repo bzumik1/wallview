@@ -103,3 +103,11 @@ Tests:
 - **BCB `boot-recovery` written in Loader mode (2026-11-26).** Cold power-up on the charger without BOOT: autoboot into `primary`. BOOT + PC with the BCB set: Loader mode.
 - Recovery tests with autoboot on: watchdog daemon stopped (hardware reset, back after 67 s), `reboot -f` through the PMIC (41 s), kernel panic (61 s). All came back to `primary`.
 - Slot update over Wi-Fi: new `primary` installed, `reboot -f`, booted, counter reset, `wallview-boot promote` to `golden`.
+
+## 2026-11-26 – panel 2: smaller kernel, GPU, thermal, loader update
+
+- Kernel limited to `ARCH_ROCKCHIP` (`kernel/config/platforms.config`): `Image` 30 MB instead of 52.6 MB, boot image 38 MiB instead of 59 MiB. All hardware still works (display, touch controller, audio, light sensor, Wi-Fi, watchdog, UARTs); `kexec` round trip 44 s instead of 65 s.
+- cpufreq already worked: `cpufreq-dt`, `schedutil`, 600–1296 MHz.
+- Thermal: `ROCKCHIP_THERMAL` built in, zones `soc-thermal` and `gpu-thermal` (about 40 °C idle), hardware shutdown at 120 °C via CRU reset (vendor value, mainline default).
+- GPU: Panfrost finds Mali-G31 (`0x7093`), `/dev/dri/renderD128`. Only the 480 MHz OPP is usable because `vdd_log` has the vendor minimum of 1.1 V.
+- After installing the new `primary`, the GPU was missing: the loader passed its own (older) DTB. The loader now extracts `boot/wallview.dtb` from the slot's ramdisk. Tested first without writing anything by `kexec` into the new kernel with a vendor DTB whose watchdog node was enabled (so that the loader stage feeds the running watchdog), then installed as `loader` and `primary`: reboot through the new loader in 36 s, GPU present. The previous loader is saved locally in `out-saved/`.

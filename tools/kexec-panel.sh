@@ -3,7 +3,7 @@ set -euo pipefail
 
 PANEL=${1:?usage: kexec-panel.sh <panel-ip>}
 WALLVIEW=$(cd "$(dirname "$0")/.." && pwd)
-OUT=$WALLVIEW/out
+OUT=${OUT:-$WALLVIEW/out}
 DTB=${DTB:-$OUT/px30-itead-nspanel-pro.dtb}
 CMDLINE=$(dd if="$OUT/recovery-wallview.img" bs=1 skip=64 count=512 2>/dev/null | tr -d '\0')
 SSH_OPTIONS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10)

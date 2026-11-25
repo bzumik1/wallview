@@ -146,7 +146,7 @@ Do this while the panel is still open.
 
 ## Two-stage boot
 
-The `recovery` partition holds the **loader**. U-Boot boots it with the vendor DTB (from `RSCE` block 13). Our kernel boots with that DTB far enough to run `init`, which sees model `Rockchip PX30 evb ddr3 board` instead of `Sonoff NSPanel Pro` and acts as a loader: it reads kernel, ramdisk and command line of an image slot from the eMMC (Android boot image header), adds `wallview.slot=<slot>` and starts it with `kexec -c` and our DTB (`/boot/wallview.dtb` from the loader's initramfs). Our DTS contains the `/memory` node with the same ranges the vendor U-Boot reports, which `kexec_load` needs.
+The `recovery` partition holds the **loader**. U-Boot boots it with the vendor DTB (from `RSCE` block 13). Our kernel boots with that DTB far enough to run `init`, which sees model `Rockchip PX30 evb ddr3 board` instead of `Sonoff NSPanel Pro` and acts as a loader: it reads kernel, ramdisk and command line of an image slot from the eMMC (Android boot image header), adds `wallview.slot=<slot>` and starts it with `kexec -c` and our DTB. The DTB is taken from the slot's own ramdisk (`boot/wallview.dtb`), so a slot update also updates the device tree; the loader's own copy is only a fallback. Our DTS contains the `/memory` node with the same ranges the vendor U-Boot reports, which `kexec_load` needs.
 
 The loader and the slots currently contain the same image; the loader is a separate copy so that a broken or interrupted slot update can never take the loader with it.
 

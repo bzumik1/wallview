@@ -328,6 +328,11 @@
 	};
 };
 
+&gpu {
+	mali-supply = <&vdd_log>;
+	status = "okay";
+};
+
 &i2c1 {
 	status = "okay";
 

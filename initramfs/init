@@ -248,7 +248,12 @@ load_image() {
 	dd if="/dev/$partition" bs="$page_size" skip=1 count="$kernel_pages" 2>/dev/null | head -c "$kernel_size" > /tmp/Image
 	dd if="/dev/$partition" bs="$page_size" skip=$((1 + kernel_pages)) count="$ramdisk_pages" 2>/dev/null | head -c "$ramdisk_size" > /tmp/initrd
 	cmdline="$(dd if="/dev/$partition" bs=1 skip=64 count=512 2>/dev/null | tr -d '\0') wallview.slot=$2"
-	kexec -c -l /tmp/Image --initrd=/tmp/initrd --dtb=/boot/wallview.dtb --command-line="$cmdline"
+	dtb=/boot/wallview.dtb
+	rm -rf /tmp/slot && mkdir -p /tmp/slot
+	(cd /tmp/slot && zcat /tmp/initrd | cpio -i -d boot/wallview.dtb) 2>/dev/null
+	[ -s /tmp/slot/boot/wallview.dtb ] && dtb=/tmp/slot/boot/wallview.dtb
+	echo "$2 from $partition with $dtb" > /tmp/loader.log
+	kexec -c -l /tmp/Image --initrd=/tmp/initrd --dtb="$dtb" --command-line="$cmdline"
 }
 
 slot_partition() {
