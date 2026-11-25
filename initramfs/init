@@ -244,7 +244,18 @@ if [ "$stage" = loader ]; then
 	reboot -f
 fi
 
+configure_devices() {
+	amixer -q -c 0 sset "Playback Mux" SPK 2>/dev/null
+	amixer -q -c 0 sset Master playback 220 2>/dev/null
+	for sensor in /sys/bus/iio/devices/iio:device*; do
+		[ "$(cat "$sensor/name" 2>/dev/null)" = stk3310 ] || continue
+		echo 0.1 > "$sensor/in_illuminance_scale"
+		echo 0.189440 > "$sensor/in_illuminance_integration_time"
+	done
+}
+
 blink 3 0.4
+configure_devices
 
 case "$stage" in
 reboot-test-first-boot)

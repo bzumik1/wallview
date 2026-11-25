@@ -80,5 +80,6 @@ Goal: find out whether the BCB path (U-Boot running on our DTB) is safe, without
 
 - DTS following the RK3326 Odroid Go layout: RK809 codec (`rk817` driver, `rockchip,mic-in-differential`) on I2S1 with `simple-audio-card` "NSPanel Pro", MCLK from `SCLK_I2S1_OUT`, routing Mic → MICL, SPKO → Speaker. No external amplifier GPIO in the vendor DTS.
 - Result: card 0 "NSPanel Pro" (`ff070000.i2s-rk817-hifi`), mixer controls `Master`, `Mic Capture Gain`, `Playback Mux` (HP/SPK, default HP).
-- Capture (16 kHz stereo): after about 0.5 s of ADC settling, channel 0 (microphone) has DC 2075 and 14 LSB RMS noise in a quiet room, channel 1 7.8 LSB. Playback through the speaker (`Playback Mux` = SPK) and a voice test are still to do (it was night).
+- Capture (16 kHz stereo): after about 0.5 s of ADC settling, channel 0 (microphone) has DC 2075 and 14 LSB RMS noise in a quiet room, channel 1 7.8 LSB.
+- Speaker (`Playback Mux` = SPK): a 1 kHz tone at −26 dBFS with `Master` 200 (−20.5 dB) was heard, and recording at the same time showed the 1 kHz component exactly during the tone (0.01 → 155). The level was suspiciously constant, so part of it may be an internal codec loopback rather than the acoustic path. A chime (440/660/880 Hz) at −14 dBFS with `Master` 240 (−5.6 dB) sounded clean. `init` now selects SPK and sets `Master` to 220.
 - `alsa-utils` (`aplay`, `arecord`, `amixer`) and the ALSA configuration (without UCM) are in the initramfs; the image is 59.3 MiB of the 64 MiB `recovery` partition.
