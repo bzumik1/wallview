@@ -138,7 +138,7 @@ If a new kernel does not come back, unplug and repeat step 4: the image in `reco
 
 Do this while the panel is still open.
 
-1. Make sure both slots hold an image that boots with Wi-Fi: `install-panel.sh <ip> primary`, reboot, check, `install-panel.sh <ip> golden`.
+1. Make sure all slots hold an image that boots with Wi-Fi: `install-panel.sh <ip> loader`, `install-panel.sh <ip> primary`, reboot, check, `wallview-boot promote`.
 2. On the panel: `wallview-boot linux`.
 3. Unplug and plug the charger **without** BOOT. The panel must come up with display and Wi-Fi on its own.
 4. Hold BOOT and plug into the PC: `rkdeveloptool ld` must show `Loader`. With the vendor DTB in `recovery` U-Boot still sees the button and the USB PHY.
@@ -146,43 +146,60 @@ Do this while the panel is still open.
 
 ## Two-stage boot
 
-Every boot of the image in `recovery` goes through two stages, both using the same kernel and initramfs:
+The `recovery` partition holds the **loader**. U-Boot boots it with the vendor DTB (from `RSCE` block 13). Our kernel boots with that DTB far enough to run `init`, which sees model `Rockchip PX30 evb ddr3 board` instead of `Sonoff NSPanel Pro` and acts as a loader: it reads kernel, ramdisk and command line of an image slot from the eMMC (Android boot image header), adds `wallview.slot=<slot>` and starts it with `kexec -c` and our DTB (`/boot/wallview.dtb` from the loader's initramfs). Our DTS contains the `/memory` node with the same ranges the vendor U-Boot reports, which `kexec_load` needs.
 
-1. **Loader.** U-Boot passes the vendor DTB (from `RSCE` block 13). Our kernel boots with it far enough to run `init`, which sees model `Rockchip PX30 evb ddr3 board` instead of `Sonoff NSPanel Pro` and acts as a loader: it reads kernel, ramdisk and command line of an image slot from the eMMC (Android boot image header), adds `wallview.slot=<slot>` and starts it with `kexec -c` and our DTB (`/boot/wallview.dtb`). Our DTS contains the `/memory` node with the same ranges the vendor U-Boot reports, which `kexec_load` needs.
-2. **WallView.** The same kernel boots again, now with our DTB: display, Wi-Fi, SSH.
+The loader and the slots currently contain the same image; the loader is a separate copy so that a broken or interrupted slot update can never take the loader with it.
 
 ## Autoboot, slots and fallbacks
 
-For an assembled panel (no BOOT button, no USB, mains power) the BCB `boot-recovery` is written to `misc`; U-Boot then selects `recovery` on every power-up, still running on the vendor DTB.
+For an assembled panel (no BOOT button, no USB, mains power) the BCB `boot-recovery` is written to `misc`; U-Boot then selects `recovery` on every power-up, still running on the vendor DTB. BOOT + PC still gives Loader mode with the BCB set (tested).
 
 | Slot | Partition | Purpose |
 |---|---|---|
-| `primary` | `recovery` (64 MB) | current image |
-| `golden` | `backup` (112 MB, unused by the stock firmware, all zeros on both units) | last image known to boot with Wi-Fi |
+| `loader` | `recovery` (64 MB) | the loader; not updated over the network |
+| `primary` | `cache` (384 MB, Android's cache, unused while Android does not run) | current image |
+| `golden` | `backup` (112 MB, unused by the stock firmware, all zeros on both units) | copy of the last `primary` that booted with Wi-Fi |
 
-The loader keeps a boot counter in `misc` sector 2046 (`WALLVIEW-TRIES=<n>`):
+The loader keeps a boot counter in `misc` sector 2046 (`WALLVIEW-TRIES=<n>`; anything that is not a plain number reads as 0):
 
-| Counter after increment | Loader boots |
+| Counter after increment | Loader tries |
 |---|---|
-| 1–2 | `primary` |
-| 3–4 | `golden` |
-| 5 or more | nothing: clears the BCB and reboots into Android |
+| 1–2 | `primary`, then `golden` if `primary` cannot be loaded |
+| 3 and more | `golden`, then `primary` |
+| no slot loadable | clears the BCB and reboots into Android |
 
-The loader starts the hardware watchdog (`dw_wdt`, cannot be stopped once running) before jumping. The kernel keeps it alive for at most 180 s (`watchdog.open_timeout=180`); WallView takes it over with the busybox `watchdog` daemon only after Wi-Fi has an address. A kernel hang, a panic (`panic=5`) or a boot without network therefore ends in a reset, which counts as a failed try. After 60 s of healthy running in the `primary` slot the counter is reset to 0. A `golden` boot leaves the counter alone, so the panel stays on `golden` until the counter is reset.
+`golden` is sticky: only a healthy `primary` boot resets the counter (60 s after Wi-Fi has an address), so after two failed `primary` boots the panel stays on `golden` until `wallview-boot reset`. Repeated failures never lead to Android.
+
+Health and recovery in the WallView stage:
+
+- The hardware watchdog (`dw_wdt`, about 21 s, cannot be stopped once running) is started by the busybox `watchdog` daemon at the very beginning of `init`. A hang of the kernel or of `init` ends in a reset (tested: 67 s from stopping the daemon to WallView again). The loader itself runs with the vendor DTB, which has no watchdog node, so the short loader phase is not covered.
+- `panic=5` restarts after a kernel panic (tested: 61 s).
+- If `wlan0` does not appear, the SDIO controller is unbound and bound again, which power-cycles the RTL8723DS through `mmc-pwrseq` (up to three times). After `kexec` the chip sometimes fails with `failed to dump efuse logical map`.
+- Without an address for 10 minutes the panel reboots, but only when autoboot is enabled (otherwise a reboot would start Android).
 
 Commands on the panel (`wallview-boot`):
 
 | Command | Effect |
 |---|---|
-| `wallview-boot status` | show BCB and counter |
+| `wallview-boot status` | checksums of the three slots, BCB and counter |
 | `wallview-boot linux` | write BCB `boot-recovery` (autoboot WallView) |
-| `wallview-boot android` | clear BCB (next boot is Android) |
+| `wallview-boot android` | clear BCB (next boot is Android, which restores the stock `recovery`; coming back needs Loader mode) |
 | `wallview-boot reset` | counter to 0 |
-| `wallview-boot install <primary\|golden> <image> <sha256>` | write an image to a slot and verify it by reading back |
+| `wallview-boot install <loader\|primary\|golden> <image> <sha256>` | write an image to a slot and verify it by reading back |
+| `wallview-boot promote` | copy `primary` to `golden` and verify |
 
-From the Mac, `tools/install-panel.sh <panel-ip> <primary|golden>` uploads `out/recovery-wallview.img` and runs `wallview-boot install`. Only install to `golden` an image that has booted with Wi-Fi from `primary`.
+From the Mac, `tools/install-panel.sh <panel-ip> <loader|primary|golden>` uploads `out/recovery-wallview.img` and runs `wallview-boot install`.
 
-Update procedure: build, test with `kexec-panel.sh`, `install-panel.sh <ip> primary`, reboot, check, and only then `install-panel.sh <ip> golden`.
+Update procedure:
+
+1. Build and test with `kexec-panel.sh` (only in RAM).
+2. `install-panel.sh <ip> primary`, then `reboot -f` on the panel: the loader starts the new `primary`.
+3. Check display, Wi-Fi and `wallview-boot status` (counter back to 0 after about a minute).
+4. `wallview-boot promote`.
+
+Update the `loader` only when really needed, and only while the panel is still reachable through Loader mode if possible.
+
+Limitations of `kexec` with a running watchdog: never `kexec` into a kernel with the vendor DTB (it does not feed the watchdog, the loader takes longer than 21 s, the watchdog resets the panel). Our own kernels pick up the running watchdog in their first second, so `kexec-panel.sh` is fine.
 
 ## Logs without a network
 

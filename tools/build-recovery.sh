@@ -2,8 +2,8 @@
 set -euo pipefail
 
 WALLVIEW=/Users/jakub/WallView
-LINUX=$HOME/src/linux
-OUT=$WALLVIEW/out
+LINUX=${LINUX:-$HOME/src/linux}
+OUT=${OUT:-$WALLVIEW/out}
 DTS_NAME=px30-itead-nspanel-pro
 ROCKCHIP_DTS=$LINUX/arch/arm64/boot/dts/rockchip
 CMDLINE="console=ttyS2,1500000n8 console=tty0 earlycon=uart8250,mmio32,0xff160000 rdinit=/init loglevel=7 ignore_loglevel panic=5 watchdog.open_timeout=180 ${WALLVIEW_EXTRA_CMDLINE:-}"
@@ -20,7 +20,7 @@ grep -q "$DTS_NAME.dtb" "$ROCKCHIP_DTS/Makefile" ||
 	echo "dtb-\$(CONFIG_ARCH_ROCKCHIP) += $DTS_NAME.dtb" >> "$ROCKCHIP_DTS/Makefile"
 
 [ -f "$LINUX/.config" ] || make -C "$LINUX" -s defconfig
-(cd "$LINUX" && scripts/kconfig/merge_config.sh -m -Q .config "$WALLVIEW/kernel/config/wallview.config" >/dev/null)
+(cd "$LINUX" && scripts/kconfig/merge_config.sh -m -Q .config "$WALLVIEW"/kernel/config/*.config >/dev/null)
 make -C "$LINUX" -s olddefconfig
 
 make -C "$LINUX" -j"$(nproc)" -s Image "rockchip/$DTS_NAME.dtb"

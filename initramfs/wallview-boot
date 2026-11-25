@@ -10,6 +10,15 @@ find_partition() {
 	done
 }
 
+slot_partition() {
+	case "$1" in
+	loader) find_partition recovery | head -n 1 ;;
+	primary) find_partition cache | head -n 1 ;;
+	golden) find_partition backup | head -n 1 ;;
+	*) echo "slot must be loader, primary or golden" >&2; exit 2 ;;
+	esac
+}
+
 misc=$(find_partition misc | head -n 1)
 [ -n "$misc" ] || { echo "misc partition not found" >&2; exit 1; }
 
@@ -18,8 +27,8 @@ clear_command() {
 }
 
 write_command() {
-	for sector in 0 32; do
-		printf '%s' "$1" | dd of="/dev/$misc" bs=512 seek="$sector" count=1 conv=sync,fsync 2>/dev/null
+	for block in 0 8; do
+		printf '%s' "$1" | dd of="/dev/$misc" bs=2048 seek="$block" count=1 conv=sync,fsync 2>/dev/null
 	done
 }
 
@@ -27,27 +36,59 @@ write_tries() {
 	printf '%s%s' "$TRIES_PREFIX" "$1" | dd of="/dev/$misc" bs=512 seek=$TRIES_SECTOR count=1 conv=sync,fsync 2>/dev/null
 }
 
+header_u32() {
+	od -An -t u4 -j "$2" -N 4 "/dev/$1" | tr -d ' '
+}
+
+image_size() {
+	[ "$(dd if="/dev/$1" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] || { echo 0; return; }
+	page=$(header_u32 "$1" 36)
+	pages() { echo $((($1 + page - 1) / page)); }
+	echo $((page * (1 + $(pages "$(header_u32 "$1" 8)") + $(pages "$(header_u32 "$1" 16)") + $(pages "$(header_u32 "$1" 24)"))))
+}
+
+slot_checksum() {
+	size=$(image_size "$1")
+	[ "$size" -gt 0 ] || { echo none; return; }
+	head -c "$size" "/dev/$1" | sha256sum | cut -d' ' -f1
+}
+
+write_verified() {
+	source=$1
+	partition=$2
+	checksum=$3
+	size=$(stat -c %s "$source")
+	[ "$size" -le "$(($(cat "/sys/class/block/$partition/size") * 512))" ] || { echo "image larger than $partition" >&2; exit 1; }
+	dd if="$source" of="/dev/$partition" bs=1M conv=fsync 2>/dev/null
+	sync
+	echo 3 > /proc/sys/vm/drop_caches
+	[ "$(head -c "$size" "/dev/$partition" | sha256sum | cut -d' ' -f1)" = "$checksum" ] || { echo "readback mismatch on $partition" >&2; exit 1; }
+}
+
 install_image() {
-	case "$1" in
-	primary) partition=$(find_partition recovery | head -n 1) ;;
-	golden) partition=$(find_partition backup | head -n 1) ;;
-	*) echo "slot must be primary or golden" >&2; exit 2 ;;
-	esac
+	partition=$(slot_partition "$1")
 	[ -n "$partition" ] || { echo "partition for $1 not found" >&2; exit 1; }
 	[ "$(sha256sum "$2" | cut -d' ' -f1)" = "$3" ] || { echo "image checksum mismatch, not written" >&2; exit 1; }
 	[ "$(dd if="$2" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] || { echo "not an Android boot image" >&2; exit 1; }
-	size=$(stat -c %s "$2")
-	[ "$size" -le "$(($(cat "/sys/class/block/$partition/size") * 512))" ] || { echo "image larger than $partition" >&2; exit 1; }
-	dd if="$2" of="/dev/$partition" bs=1M conv=fsync 2>/dev/null
-	sync
-	echo 3 > /proc/sys/vm/drop_caches
-	[ "$(head -c "$size" "/dev/$partition" | sha256sum | cut -d' ' -f1)" = "$3" ] || { echo "readback mismatch on $partition" >&2; exit 1; }
+	write_verified "$2" "$partition" "$3"
 	echo "$1 image written to $partition and verified"
+}
+
+promote_primary() {
+	primary=$(slot_partition primary)
+	golden=$(slot_partition golden)
+	size=$(image_size "$primary")
+	[ "$size" -gt 0 ] || { echo "primary slot holds no image" >&2; exit 1; }
+	head -c "$size" "/dev/$primary" > /tmp/promote.img
+	checksum=$(sha256sum /tmp/promote.img | cut -d' ' -f1)
+	[ "$(slot_checksum "$primary")" = "$checksum" ] || { echo "primary changed while reading" >&2; exit 1; }
+	write_verified /tmp/promote.img "$golden" "$checksum"
+	rm /tmp/promote.img
+	echo "primary copied to golden ($golden) and verified"
 }
 
 case "$1" in
 linux)
-	clear_command
 	write_command boot-recovery
 	;;
 android)
@@ -59,10 +100,17 @@ reset)
 install)
 	install_image "$2" "$3" "$4"
 	;;
+promote)
+	promote_primary
+	;;
 status)
+	for name in loader primary golden; do
+		partition=$(slot_partition "$name")
+		echo "$name ($partition): $(image_size "$partition") bytes, sha256 $(slot_checksum "$partition")"
+	done
 	;;
 *)
-	echo "usage: wallview-boot linux|android|reset|status|install <primary|golden> <image> <sha256>" >&2
+	echo "usage: wallview-boot linux|android|reset|status|promote|install <loader|primary|golden> <image> <sha256>" >&2
 	exit 2
 	;;
 esac

@@ -11,7 +11,7 @@ Mainline Linux 6.18 boots on an NSPanel Pro 86 (Gen1) with the original bootload
 | Phase | State |
 |---|---|
 | 0 · Preparation | done: backups of two units, hardware mapped from the vendor DTS, board test points measured |
-| 1 · Bootloader and kernel | in progress: kernel, eMMC, PMIC, backlight, display, Wi-Fi, SSH, kexec, two-stage autoboot with fallback slot and watchdog, light sensor, touch controller (probe), sound (speaker and microphone) work; Zigbee module found on UART5; touch events next; vendor U-Boot kept |
+| 1 · Bootloader and kernel | in progress: kernel, eMMC, PMIC, backlight, display, Wi-Fi, SSH, kexec, two-stage autoboot (enabled on the dev unit) with loader, primary and golden slots and watchdog, light sensor, touch controller (probe), sound (speaker and microphone) work; Zigbee module found on UART5; touch events next; vendor U-Boot kept |
 | 2–9 | not started |
 
 ## Documentation

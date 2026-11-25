@@ -8,3 +8,4 @@ maskrom-loader/
 *.log
 log/
 .DS_Store
+out-*/

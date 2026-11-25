@@ -83,3 +83,23 @@ Goal: find out whether the BCB path (U-Boot running on our DTB) is safe, without
 - Capture (16 kHz stereo): after about 0.5 s of ADC settling, channel 0 (microphone) has DC 2075 and 14 LSB RMS noise in a quiet room, channel 1 7.8 LSB.
 - Speaker (`Playback Mux` = SPK): a 1 kHz tone at −26 dBFS with `Master` 200 (−20.5 dB) was heard, and recording at the same time showed the 1 kHz component exactly during the tone (0.01 → 155). The level was suspiciously constant, so part of it may be an internal codec loopback rather than the acoustic path. A chime (440/660/880 Hz) at −14 dBFS with `Master` 240 (−5.6 dB) sounded clean. `init` now selects SPK and sets `Master` to 220.
 - `alsa-utils` (`aplay`, `arecord`, `amixer`) and the ALSA configuration (without UCM) are in the initramfs; the image is 59.3 MiB of the 64 MiB `recovery` partition.
+
+## 2026-11-26 – panel 2: autoboot redesign after review, autoboot enabled
+
+An independent review of the first autoboot version found:
+
+- the loader could not start the watchdog (the vendor DTB has no enabled watchdog node), so the documented protection did not exist;
+- the boot counter led to Android after a few slow-router power cuts or a corrupted counter value could make `init` (PID 1) fail;
+- `golden` was not sticky;
+- the `primary` slot was also the loader, so an interrupted update could break the loader.
+
+Changes: separate `loader` (`recovery`), `primary` (`cache`) and `golden` (`backup`) slots; robust counter; `golden` sticky, Android only when no slot can be loaded; watchdog daemon from the start of the WallView stage; waiting for Wi-Fi without limit and resetting the counter only after an address; `wallview-boot promote`.
+
+Tests:
+
+- `kexec` into the loader (vendor DTB) from a WallView with the watchdog running: the panel was reset by the watchdog. Not a real-boot problem, but this test path is no longer used.
+- A `kexec`ed kernel came up without Wi-Fi: `rtw88_8723ds: failed to dump efuse logical map`. Added an SDIO unbind/bind power cycle and a reboot after 10 minutes without an address (when autoboot is on). Four following `kexec` rounds were fine (about 65 s each).
+- Cold boot through charger + BOOT with the new loader: `primary` loaded from `cache`.
+- **BCB `boot-recovery` written in Loader mode (2026-11-26).** Cold power-up on the charger without BOOT: autoboot into `primary`. BOOT + PC with the BCB set: Loader mode.
+- Recovery tests with autoboot on: watchdog daemon stopped (hardware reset, back after 67 s), `reboot -f` through the PMIC (41 s), kernel panic (61 s). All came back to `primary`.
+- Slot update over Wi-Fi: new `primary` installed, `reboot -f`, booted, counter reset, `wallview-boot promote` to `golden`.

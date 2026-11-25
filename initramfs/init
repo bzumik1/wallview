@@ -25,28 +25,28 @@ find_partition() {
 }
 
 misc=""
-recovery=""
+primary=""
 golden=""
 for attempt in $(seq 1 60); do
 	misc=$(find_partition misc | head -n 1)
-	recovery=$(find_partition recovery | head -n 1)
+	primary=$(find_partition cache | head -n 1)
 	golden=$(find_partition backup | head -n 1)
-	[ -n "$misc" ] && [ -n "$recovery" ] && [ -n "$golden" ] && break
+	[ -n "$misc" ] && [ -n "$primary" ] && [ -n "$golden" ] && break
 	sleep 0.5
 done
 
 TRIES_SECTOR=2046
 TRIES_PREFIX=WALLVIEW-TRIES=
 MAX_PRIMARY_TRIES=2
-MAX_GOLDEN_TRIES=4
 slot=$(sed -n 's/.*wallview\.slot=\([a-z]*\).*/\1/p' /proc/cmdline)
 
 read_tries() {
 	value=$(dd if="/dev/$misc" bs=512 skip=$TRIES_SECTOR count=1 2>/dev/null | tr -d '\0')
-	case "$value" in
-	"$TRIES_PREFIX"[0-9]*) echo "${value#"$TRIES_PREFIX"}" ;;
-	*) echo 0 ;;
-	esac
+	if echo "$value" | grep -qxE "${TRIES_PREFIX}(0|[1-9][0-9]{0,3})"; then
+		echo "${value#"$TRIES_PREFIX"}"
+	else
+		echo 0
+	fi
 }
 
 write_tries() {
@@ -139,6 +139,8 @@ collect_full() {
 	ip route 2>&1
 	echo "wlan0 ip: $(cat /run/wlan0.ip 2>/dev/null)"
 	wpa_cli -p /run/wpa_supplicant -i wlan0 status 2>&1
+	echo "--- wifi"
+	cat /tmp/wifi.log 2>/dev/null
 	echo "--- dropbear"
 	cat /tmp/dropbear.log 2>/dev/null
 }
@@ -184,27 +186,49 @@ usb_watch() {
 	done
 }
 
-start_wifi() {
-	[ -f /etc/wpa_supplicant.conf ] || return
-	for attempt in $(seq 1 60); do
-		[ -e /sys/class/net/wlan0 ] && break
+wait_for_wlan() {
+	for attempt in $(seq 1 30); do
+		[ -e /sys/class/net/wlan0 ] && return 0
 		sleep 0.5
 	done
-	[ -e /sys/class/net/wlan0 ] || return
+	return 1
+}
+
+reset_sdio() {
+	echo ff380000.mmc > /sys/bus/platform/drivers/dwmmc_rockchip/unbind
+	sleep 1
+	echo ff380000.mmc > /sys/bus/platform/drivers/dwmmc_rockchip/bind
+	echo "$(cut -d' ' -f1 /proc/uptime) sdio reset" >> /tmp/wifi.log
+}
+
+autoboot_enabled() {
+	[ "$(dd if="/dev/$misc" bs=32 count=1 2>/dev/null | tr -d '\0')" = boot-recovery ]
+}
+
+start_wifi() {
+	[ -f /etc/wpa_supplicant.conf ] || return
+	for round in 1 2 3; do
+		wait_for_wlan && break
+		reset_sdio
+	done
+	wait_for_wlan || return
 	mkdir -p /run/wpa_supplicant /etc/dropbear /var/run
 	ip link set wlan0 up
 	wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf
 	udhcpc -i wlan0 -b -x hostname:wallview -s /etc/udhcpc.script -p /run/udhcpc.pid
 	dropbear -R -E -s 2> /tmp/dropbear.log
-	for attempt in $(seq 1 60); do
-		if [ -s /run/wlan0.ip ]; then
-			start_watchdog
-			[ "$slot" = primary ] && (sleep 60 && write_tries 0) &
-			blink 2 1
-			return
-		fi
+	waited=0
+	until [ -s /run/wlan0.ip ]; do
 		sleep 1
+		waited=$((waited + 1))
+		if [ "$waited" -ge 600 ] && autoboot_enabled; then
+			echo "$(cut -d' ' -f1 /proc/uptime) no address for 10 minutes, rebooting" >> /tmp/wifi.log
+			save_log full no-wifi-reboot 3
+			reboot -f
+		fi
 	done
+	[ "$slot" = primary ] && (sleep 60 && write_tries 0) &
+	blink 2 1
 }
 
 partition_u32() {
@@ -227,18 +251,27 @@ load_image() {
 	kexec -c -l /tmp/Image --initrd=/tmp/initrd --dtb=/boot/wallview.dtb --command-line="$cmdline"
 }
 
+slot_partition() {
+	case "$1" in
+	primary) echo "$primary" ;;
+	golden) echo "$golden" ;;
+	esac
+}
+
 if [ "$stage" = loader ]; then
-	tries=$(($(read_tries) + 1))
+	tries=$(read_tries)
+	[ "$tries" -lt 9999 ] && tries=$((tries + 1))
 	write_tries "$tries"
 	save_log basic "loader-tries-$tries" 1
-	start_watchdog
 	if [ "$tries" -le "$MAX_PRIMARY_TRIES" ]; then
-		load_image "$recovery" primary && kexec -e
+		order="primary golden"
+	else
+		order="golden primary"
 	fi
-	if [ "$tries" -le "$MAX_GOLDEN_TRIES" ]; then
-		load_image "$golden" golden && kexec -e
-	fi
-	save_log basic loader-fallback-android 1
+	for candidate in $order; do
+		load_image "$(slot_partition "$candidate")" "$candidate" && kexec -e
+	done
+	save_log basic loader-no-slot-android 1
 	dd if=/dev/zero of="/dev/$misc" bs=512 count=64 conv=fsync 2>/dev/null
 	sync
 	reboot -f
@@ -254,6 +287,7 @@ configure_devices() {
 	done
 }
 
+start_watchdog
 blink 3 0.4
 configure_devices
 
