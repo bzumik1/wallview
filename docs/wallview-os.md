@@ -24,7 +24,7 @@ All other partitions (Android `boot`, `system`, `vendor`, `userdata`, ITEAD `oem
 
 ## Kiosk
 
-Cog runs on DRM/KMS without a compositor and is restarted if it exits. It first opens `/usr/share/wallview/launcher.html` (start and offline screen in the design kit style: logo, clock and date once the time is synchronized, connection status). The page tries the dashboard URL every 5 seconds and switches to it as soon as it answers. Font: Inter (OFL, `usr/share/wallview/fonts/`). Time zone Europe/Prague, locales `en_US` and `cs_CZ`. WebKit takes the type of `file://` pages from the shared MIME database (`shared-mime-info`, only `mime.cache` on the target); without it the launcher is shown as plain text.
+Cog runs on DRM/KMS without a compositor and is restarted if it exits. It first opens `/usr/share/wallview/launcher.html` (start and offline screen in the design kit style: logo, clock and date once the time is synchronized, connection status). The page tries the dashboard URL every 5 seconds and switches to it as soon as it answers. Font: Inter (OFL, `usr/share/wallview/fonts/`). Time zone Europe/Prague, locales `en_US` and `cs_CZ`. HTTPS needs `BR2_PACKAGE_LIBSOUP3_SSL` (glib-networking with GnuTLS as the GIO TLS backend, CA certificates from `ca-certificates`); without it every HTTPS dashboard stays at "Connecting to Home Assistant…". WebKit takes the type of `file://` pages from the shared MIME database (`shared-mime-info`, only `mime.cache` on the target); without it the launcher is shown as plain text.
 
 The watchdog daemon started by the initramfs keeps running after `switch_root`.
 
