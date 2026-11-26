@@ -6,13 +6,31 @@ WallView is not affiliated with ITEAD/Sonoff or the Open Home Foundation. "for N
 
 ## Status
 
-Mainline Linux 6.18 boots on an NSPanel Pro 86 (Gen1) with the original bootloader and without a serial console; only the `recovery`, `backup` and `misc` partitions are used. The display, Wi-Fi and SSH work, the panel can boot into WallView on its own with a fallback image and a watchdog, and new kernels are started over the network with `kexec`. The first development unit is still stuck from an earlier experiment (see the incident report).
+Mainline Linux 6.18 runs on an NSPanel Pro 86 (Gen1) with the original bootloader and without a serial console. The panel boots into WallView on its own (two-stage boot with a rescue slot and a hardware watchdog); everything after that is done over Wi-Fi. Android is still on the eMMC, untouched. The first development unit is still stuck from an earlier experiment (see the incident report).
+
+| Hardware | Mainline driver | State |
+|---|---|---|
+| CPU, cpufreq (600–1296 MHz), thermal | `cpufreq-dt`, `rockchip_thermal` | works |
+| eMMC, RK809 PMIC | `dw_mmc`, `rk808` | works |
+| Display 480×480 (ST7701S, MIPI DSI) | own `panel-itead-nspanel-pro` | works |
+| Backlight | `pwm-backlight` | works |
+| GPU Mali-G31 | Panfrost | driver loads; Mesa in progress |
+| Touch controller CST226SE | `hynitron_cstxxx` + patch | probes; events untested (panel cable unplugged) |
+| Wi-Fi RTL8723DS | `rtw88_8723ds` | works |
+| Bluetooth RTL8723DS | `hci_uart` H5 + `btrtl` | works (vendor firmware) |
+| Light/proximity sensor | `stk3310` | works |
+| Speaker, microphone (RK809 codec) | `rk817` codec | works |
+| Zigbee/Thread module EFR32MG21 | UART5 | answers (EZSP) |
+| Hardware watchdog | `dw_wdt` | works |
 
 | Phase | State |
 |---|---|
-| 0 · Preparation | done: backups of two units, hardware mapped from the vendor DTS, board test points measured |
-| 1 · Bootloader and kernel | in progress: kernel, eMMC, PMIC, backlight, display, Wi-Fi, SSH, kexec, two-stage autoboot (enabled on the dev unit) with loader, primary and golden slots and watchdog, light sensor, touch controller (probe), sound (speaker and microphone) work; Zigbee module found on UART5; touch events next; vendor U-Boot kept |
-| 2–9 | not started |
+| 0 · Preparation | done |
+| 1 · Bootloader and kernel | nearly done; vendor U-Boot kept, own bootloader later |
+| 2 · System and kiosk | in progress: Buildroot root file system with WPE WebKit/Cog building, boot flow, start screen |
+| 3 · Home Assistant integration | in progress: `wallview-agent` (MQTT discovery) works against a test broker |
+| 4 · User experience | started: boot logo, start/offline screen |
+| 5–9 | not started |
 
 ## Documentation
 
