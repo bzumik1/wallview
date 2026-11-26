@@ -83,4 +83,14 @@ gh run download -R bzumik1/wallview <run-id> -n wallview-rootfs -D ~/WallView/ou
 limactl shell wallview -- env ROOTFS=/Users/jakub/WallView/out/ci/rootfs.erofs DEV_FILES=1 bash ~/WallView/tools/build-slot.sh
 ```
 
+CI caches, so only the first build per configuration takes hours:
+
+| Cache | Key | Content |
+|---|---|---|
+| downloads + ccache | every run, restored from the newest | `br-dl`, `.buildroot-ccache` |
+| Buildroot output | Buildroot version + hash of `configs/`, `Config.in`, `external.mk`, `external.desc` | `host/`, `target/`, `staging`, `.config`, and from `build/` only the stamp and file-list files (sources and objects are deleted before saving) |
+| Rust | `Cargo.lock` + agent sources | cargo registry and `agent-target` |
+
+With a hit on the output cache, all stamps are touched (the fresh Buildroot clone has newer files) and `make` only runs the finalize step: overlay, `post-build.sh` (agent), locales and the EROFS image. A change in the defconfig or the external tree is a miss and a full build (helped by ccache). Removing a file from the overlay does not remove it from a cached `target/`; for that, or if a cached build misbehaves, raise `v1` in the cache key in `.github/workflows/rootfs.yml`.
+
 The CI image contains neither Wi-Fi credentials nor SSH keys. `DEV_FILES=1` unpacks it, adds `/etc/wpa_supplicant.conf` and `/root/.ssh/authorized_keys` from `local/` and packs it again (LZ4HC, same as Buildroot), so a development panel stays reachable. Without it the panel starts Improv and has no SSH access.

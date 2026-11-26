@@ -42,6 +42,16 @@ jobs:
       - name: Install Rust
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.100.0
 
+      - name: Restore Rust cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/.cargo/registry
+            /home/runner/.cargo/git
+            /home/runner/build/agent-target
+          key: agent-${{ hashFiles('agent/Cargo.lock') }}-${{ hashFiles('agent/src/**', 'agent/build.rs', 'agent/proto/**') }}
+          restore-keys: agent-${{ hashFiles('agent/Cargo.lock') }}-
+
       - name: Fetch Buildroot
         run: git clone -q --depth 1 --branch "$BUILDROOT_VERSION" https://gitlab.com/buildroot.org/buildroot.git "$HOME/buildroot"
 
@@ -53,6 +63,23 @@ jobs:
             /home/runner/.buildroot-ccache
           key: buildroot-${{ env.BUILDROOT_VERSION }}-${{ github.run_id }}
           restore-keys: buildroot-${{ env.BUILDROOT_VERSION }}-
+
+      - name: Compute Buildroot output cache key
+        id: key
+        run: echo "output=br-output-v1-$BUILDROOT_VERSION-${{ hashFiles('buildroot/configs/**', 'buildroot/Config.in', 'buildroot/external.mk', 'buildroot/external.desc') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Buildroot output
+        id: output
+        uses: actions/cache/restore@v4
+        with:
+          path: /home/runner/br
+          key: ${{ steps.key.outputs.output }}
+
+      - name: Mark restored packages as built
+        if: steps.output.outputs.cache-hit == 'true'
+        run: |
+          find "$HOME/br/build" -name '.stamp_*' -exec touch {} +
+          du -sh "$HOME/br"
 
       - name: Build
         run: |
@@ -74,6 +101,25 @@ jobs:
             /home/runner/br-dl
             /home/runner/.buildroot-ccache
           key: buildroot-${{ env.BUILDROOT_VERSION }}-${{ github.run_id }}
+
+      - name: Keep only installed results and stamps
+        if: steps.output.outputs.cache-hit != 'true'
+        run: |
+          mv "$HOME/br/images" "$HOME/images"
+          find "$HOME/br/build" -mindepth 2 -maxdepth 2 ! -name '.*' ! -path "$HOME/br/build/buildroot-config/*" -exec rm -rf {} +
+          rm -rf "$HOME/br/build/buildroot-fs"
+          du -sh "$HOME/br"
+
+      - name: Save Buildroot output
+        if: steps.output.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /home/runner/br
+          key: ${{ steps.key.outputs.output }}
+
+      - name: Put images back
+        if: steps.output.outputs.cache-hit != 'true'
+        run: mv "$HOME/images" "$HOME/br/images"
 
       - name: Upload root file system
         uses: actions/upload-artifact@v4
