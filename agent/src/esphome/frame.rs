@@ -172,6 +172,12 @@ impl Connection {
 }
 
 impl Sender {
+    pub fn close(&self) {
+        if let Ok(writer) = self.writer.lock() {
+            let _ = writer.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
     pub fn send(&self, message_type: u16, data: &[u8]) -> io::Result<()> {
         let Some(transport) = &self.transport else {
             let mut frame = vec![PLAINTEXT_PREAMBLE];

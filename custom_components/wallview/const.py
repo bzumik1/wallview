@@ -1,6 +1,5 @@
 DOMAIN = "wallview"
 
-CONF_NODE = "node"
 CONF_USER_ID = "user_id"
 CONF_REFRESH_TOKEN_ID = "refresh_token_id"
 

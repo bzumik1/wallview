@@ -6,6 +6,7 @@ use std::fs;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -62,6 +63,7 @@ pub mod message_type {
 pub struct KeyStore {
     path: String,
     key: Arc<Mutex<Option<[u8; 32]>>>,
+    generation: Arc<AtomicU64>,
 }
 
 impl KeyStore {
@@ -69,7 +71,7 @@ impl KeyStore {
         let key = fs::read_to_string(path).ok().and_then(|text| {
             base64::engine::general_purpose::STANDARD.decode(text.trim()).ok()?.try_into().ok()
         });
-        KeyStore { path: path.to_string(), key: Arc::new(Mutex::new(key)) }
+        KeyStore { path: path.to_string(), key: Arc::new(Mutex::new(key)), generation: Arc::new(AtomicU64::new(0)) }
     }
 
     pub fn current(&self) -> Option<[u8; 32]> {
@@ -82,7 +84,12 @@ impl KeyStore {
         fs::write(&temporary, format!("{encoded}\n"))?;
         fs::rename(&temporary, &self.path)?;
         *self.key.lock().unwrap() = Some(key);
+        self.generation.fetch_add(1, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
     }
 }
 
@@ -139,10 +146,15 @@ fn handle_client(
         }
     });
 
+    let generation = keys.generation();
     let mut subscribed = false;
     let mut last_presence = None;
     let mut last_sensors = Instant::now();
     loop {
+        if keys.generation() != generation {
+            sender.close();
+            return Ok(());
+        }
         match messages.recv_timeout(POLL_INTERVAL) {
             Ok(Incoming::Message(message_type, data)) => {
                 if !handle_message(&sender, device, keys, advertisement, message_type, &data, &mut subscribed)? {

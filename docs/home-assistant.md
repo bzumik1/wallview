@@ -65,13 +65,17 @@ WPE WebKit has no on-screen keyboard, so the Home Assistant login page cannot be
 `custom_components/wallview` is a small Home Assistant integration, installed once through HACS (this repository, category Integration). It needs no password and no typing on the panel:
 
 1. The integration discovers each panel through the same mDNS record as ESPHome (`_esphomelib._tcp`, `project_name=WallView*`) and shows "WallView xxxx". "Submit" approves it.
-2. As soon as the panel's ESPHome action `pair` exists (the panel is also added in ESPHome, in either order), the integration creates a one-time code (random, valid for 10 minutes) and calls `esphome.wallview_xxxxxx_pair`. The code travels over the encrypted ESPHome connection.
+2. As soon as the panel's ESPHome action `pair` exists (the panel is also added in ESPHome, in either order), the integration creates a one-time code (random, valid for 10 minutes, older codes of the panel are dropped) and calls `esphome.<device_name>_pair`, with the device name taken from the ESPHome config entry of the same MAC address. The code travels over the encrypted ESPHome connection.
 3. The agent writes it to `/data/wallview/pairing` and restarts the kiosk. The kiosk script passes it once to the start page and deletes the file.
-4. The start page opens `<Home Assistant>/api/wallview/pair?secret=…&next=<dashboard>`. That page is served by the integration from the Home Assistant origin. It sends the code back together with the client ID `<origin>/`. The integration then creates a refresh token for the user "WallView" (created on first use: no administrator rights, local network only). The page stores the tokens in the frontend's `hassTokens`, exactly like a normal login with "Keep me logged in", and opens the dashboard.
+4. The start page sends the code and the client ID `<origin>/` to `<Home Assistant>/api/wallview/pair` (POST). The integration accepts it only from the panel's own IP address (host of the ESPHome config entry) and only once; a code that leaked to another device is useless. It creates a refresh token without expiry for the user "WallView" (created on first use: no administrator rights, local network only).
+5. The start page opens `<Home Assistant>/api/wallview/pair#tokens=…&next=<dashboard>`. That page comes from the Home Assistant origin and takes the tokens from the URL fragment (never sent to a server or logged). It stores them in the frontend's `hassTokens`, exactly like a normal login with "Keep me logged in", and opens the dashboard.
+6. If the code is rejected (expired, Home Assistant restarted, other Home Assistant), the start page shows the touch keyboard sign-in with the reason.
 
 Each panel has its own refresh token (named after the panel, visible on the WallView user's profile). Pairing again replaces it, and removing the panel from the integration revokes it. The button "Sign in kiosk" (WallView integration) repeats the sign-in, for example after the tokens were deleted. Dashboards shown on the panel must be visible to the "WallView" user.
 
-Tested 2026-11-26 with Home Assistant 2026.11.3 in the build VM, the agent and the start page in Chrome: discovery, approval before and after adding in ESPHome, code delivery, sign-in as "WallView", dashboard loaded, token replaced on re-pairing and revoked on removal.
+After the panel stores its encryption key, the agent closes every open API connection, including unencrypted ones opened before, as ESPHome firmware does.
+
+Tested 2026-11-26 with Home Assistant 2026.11.3 in the build VM, the agent and the start page in Chrome. Covered: discovery, approval before and after adding in ESPHome, key provisioning with a single encrypted connection left, code delivery, rejection from another IP address with fallback to the keyboard, success from the panel address, reuse rejected, token without expiry, the token page signing the frontend in as "WallView", token replaced on re-pairing. An earlier version was reviewed by Fable 5.2; its findings are fixed in this design.
 
 ### Manual: touch keyboard
 

@@ -249,7 +249,7 @@ const LAYOUTS = {
 	symbols: ["[]{}#%^*+=", "\\|~<>€£¥•`", ".,?!'_"],
 };
 
-const target = decodeURIComponent(location.hash.slice(1));
+const target = location.hash.slice(1);
 const query = new URLSearchParams(location.search);
 const signInGeneration = query.get("sign-in") || "0";
 const pairing = query.get("pairing") || "";
@@ -413,12 +413,17 @@ function markSignedIn() {
 	}
 }
 
-function pair() {
-	markSignedIn();
-	const url = new URL("/api/wallview/pair", hassUrl);
-	url.searchParams.set("secret", pairing);
-	url.searchParams.set("next", target);
-	location.replace(url.href);
+async function pair() {
+	try {
+		const tokens = await request("/api/wallview/pair", { secret: pairing, client_id: clientId });
+		markSignedIn();
+		const url = new URL("/api/wallview/pair", hassUrl);
+		url.hash = new URLSearchParams({ tokens: JSON.stringify(tokens), next: target }).toString();
+		location.replace(url.href);
+	} catch (error) {
+		await startSignIn();
+		errorLine.textContent = `Automatic sign-in failed: ${error.message}`;
+	}
 }
 
 function finishSignIn(code) {

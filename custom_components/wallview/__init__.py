@@ -7,7 +7,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .const import CONF_REFRESH_TOKEN_ID, DOMAIN
-from .pairing import Pairings, PairView
+from .pairing import Pairings, PairView, async_revoke
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.BUTTON]
@@ -32,4 +32,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    hass.data[DOMAIN].async_revoke(entry)
+    async_revoke(hass, entry)
