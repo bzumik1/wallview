@@ -250,7 +250,9 @@ const LAYOUTS = {
 };
 
 const target = decodeURIComponent(location.hash.slice(1));
-const signInGeneration = new URLSearchParams(location.search).get("sign-in") || "0";
+const query = new URLSearchParams(location.search);
+const signInGeneration = query.get("sign-in") || "0";
+const pairing = query.get("pairing") || "";
 const hassUrl = originOf(target);
 const clientId = `${hassUrl}/`;
 const signInMarker = `${hassUrl} ${signInGeneration}`;
@@ -312,7 +314,9 @@ async function tryTarget() {
 		setTimeout(tryTarget, RETRY_MS);
 		return;
 	}
-	if (isSignedIn()) {
+	if (pairing) {
+		pair();
+	} else if (isSignedIn()) {
 		location.replace(target);
 	} else {
 		startSignIn();
@@ -402,11 +406,23 @@ async function submitSignIn() {
 	}
 }
 
-function finishSignIn(code) {
+function markSignedIn() {
 	try {
 		localStorage.setItem(SIGNED_IN_KEY, signInMarker);
 	} catch (error) {
 	}
+}
+
+function pair() {
+	markSignedIn();
+	const url = new URL("/api/wallview/pair", hassUrl);
+	url.searchParams.set("secret", pairing);
+	url.searchParams.set("next", target);
+	location.replace(url.href);
+}
+
+function finishSignIn(code) {
+	markSignedIn();
 	const url = new URL(target);
 	url.searchParams.set("auth_callback", "1");
 	url.searchParams.set("code", code);

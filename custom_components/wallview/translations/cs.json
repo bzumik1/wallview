@@ -1,0 +1,22 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "confirm": {
+        "description": "Přihlásit kiosek panelu {name} do Home Assistantu? Vytvoří se uživatel Home Assistantu „WallView“ (bez práv správce, jen z místní sítě) a panel zobrazí jeho dashboardy bez zadávání hesla. Panel přidej také v ESPHome; přihlášení se odešle, jakmile jsou nastavené obě integrace."
+      }
+    },
+    "abort": {
+      "already_configured": "Tento panel je už přihlášený.",
+      "discovery_only": "Panely WallView se v místní síti najdou automaticky.",
+      "not_wallview": "Toto zařízení není panel WallView."
+    }
+  },
+  "entity": {
+    "button": {
+      "sign_in_kiosk": {
+        "name": "Přihlásit kiosek"
+      }
+    }
+  }
+}

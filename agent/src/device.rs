@@ -5,6 +5,8 @@ use std::process::Command;
 const BACKLIGHT: &str = "/sys/class/backlight/backlight";
 const URL_FILE: &str = "/data/wallview/url";
 const SIGN_IN_FILE: &str = "/data/wallview/sign-in";
+const PAIRING_FILE: &str = "/data/wallview/pairing";
+const PAIRING_SECRET_LENGTH: std::ops::RangeInclusive<usize> = 16..=128;
 const DEFAULT_URL: &str = "http://homeassistant.local:8123";
 const BL_POWER_ON: &str = "0";
 const BL_POWER_OFF: &str = "4";
@@ -105,6 +107,14 @@ impl Device {
     pub fn request_sign_in(&self) {
         let generation = read_number(SIGN_IN_FILE).unwrap_or(0.0) as u64 + 1;
         if fs::write(SIGN_IN_FILE, format!("{generation}\n")).is_ok() {
+            self.restart_kiosk();
+        }
+    }
+
+    pub fn start_pairing(&self, secret: &str) {
+        let valid = PAIRING_SECRET_LENGTH.contains(&secret.len())
+            && secret.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+        if valid && fs::write(PAIRING_FILE, format!("{secret}\n")).is_ok() {
             self.restart_kiosk();
         }
     }

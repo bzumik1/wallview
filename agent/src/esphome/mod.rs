@@ -46,6 +46,8 @@ pub mod message_type {
     pub const LIGHT_STATE: u16 = 24;
     pub const SENSOR_STATE: u16 = 25;
     pub const TEXT_SENSOR_STATE: u16 = 27;
+    pub const LIST_ENTITIES_SERVICES: u16 = 41;
+    pub const EXECUTE_SERVICE_REQUEST: u16 = 42;
     pub const LIGHT_COMMAND_REQUEST: u16 = 32;
     pub const LIST_ENTITIES_BUTTON: u16 = 61;
     pub const BUTTON_COMMAND_REQUEST: u16 = 62;
@@ -119,8 +121,7 @@ fn handle_client(
     advertisement: &Arc<Mutex<Option<mdns::Advertisement>>>,
 ) -> io::Result<()> {
     stream.set_nodelay(true)?;
-    let psk = keys.current().unwrap_or([0u8; 32]);
-    let mut connection = Connection::accept(stream, &psk, &device.node_name(), &device.id)?;
+    let mut connection = Connection::accept(stream, keys.current(), &device.node_name(), &device.id)?;
     let sender = connection.sender();
 
     let (incoming, messages) = mpsc::channel();
@@ -238,6 +239,7 @@ fn handle_message(
             }
         }
         BUTTON_COMMAND_REQUEST => entities::handle_button(device, data),
+        EXECUTE_SERVICE_REQUEST => entities::handle_service(device, data),
         TEXT_COMMAND_REQUEST => {
             if let Some((state_type, state)) = entities::handle_text(device, data) {
                 sender.send(state_type, &state)?;
@@ -246,7 +248,8 @@ fn handle_message(
         NOISE_ENCRYPTION_SET_KEY_REQUEST => {
             let success = NoiseEncryptionSetKeyRequest::decode(data)
                 .ok()
-                .and_then(|request| <[u8; 32]>::try_from(request.key.as_slice()).ok())
+                .and_then(|request| base64::engine::general_purpose::STANDARD.decode(&request.key).ok())
+                .and_then(|key| <[u8; 32]>::try_from(key.as_slice()).ok())
                 .filter(|key| *key != [0u8; 32])
                 .map(|key| keys.store(key).is_ok())
                 .unwrap_or(false);

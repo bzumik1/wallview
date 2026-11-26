@@ -14,10 +14,12 @@ kiosk_loop() {
 		url=$(cat /data/wallview/url 2>/dev/null || echo "$DEFAULT_URL")
 		extra=$(cat /data/wallview/cog-args 2>/dev/null)
 		generation=$(cat /data/wallview/sign-in 2>/dev/null || echo 0)
+		pairing=$(cat /data/wallview/pairing 2>/dev/null)
+		rm -f /data/wallview/pairing
 		export LANG=$(cat /data/wallview/language 2>/dev/null || echo en_US.UTF-8)
 		cog --platform=drm --platform-params=renderer=gles --cookie-store=always \
 			--allow-file-access-from-file-urls=true --allow-universal-access-from-file-urls=true \
-			$extra "file:///usr/share/wallview/launcher.html?sign-in=$generation#$url" >> /tmp/cog.log 2>&1
+			$extra "file:///usr/share/wallview/launcher.html?sign-in=$generation&pairing=$pairing#$url" >> /tmp/cog.log 2>&1
 		sleep 2
 	done
 }

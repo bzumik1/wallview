@@ -1,11 +1,12 @@
 use prost::Message;
 
 use crate::api::{
-    BinarySensorStateResponse, ButtonCommandRequest, ColorMode, EntityCategory, LightCommandRequest,
-    LightStateResponse, ListEntitiesBinarySensorResponse, ListEntitiesButtonResponse,
-    ListEntitiesLightResponse, ListEntitiesSensorResponse, ListEntitiesTextResponse,
-    ListEntitiesTextSensorResponse, SensorStateClass, SensorStateResponse, TextCommandRequest,
-    TextMode, TextSensorStateResponse, TextStateResponse,
+    BinarySensorStateResponse, ButtonCommandRequest, ColorMode, EntityCategory, ExecuteServiceRequest,
+    LightCommandRequest, LightStateResponse, ListEntitiesBinarySensorResponse, ListEntitiesButtonResponse,
+    ListEntitiesLightResponse, ListEntitiesSensorResponse, ListEntitiesServicesArgument,
+    ListEntitiesServicesResponse, ListEntitiesTextResponse, ListEntitiesTextSensorResponse, SensorStateClass,
+    SensorStateResponse, ServiceArgType, TextCommandRequest, TextMode, TextSensorStateResponse,
+    TextStateResponse,
 };
 use crate::device::Device;
 
@@ -25,6 +26,7 @@ pub const DASHBOARD_URL: u32 = 11;
 pub const IP_ADDRESS: u32 = 12;
 pub const VERSION: u32 = 13;
 pub const SIGN_IN_AGAIN: u32 = 14;
+pub const PAIR: u32 = 15;
 
 pub type Encoded = (u16, Vec<u8>);
 
@@ -147,6 +149,15 @@ pub fn list() -> Vec<Encoded> {
             },
         ));
     }
+    messages.push(encode(
+        message_type::LIST_ENTITIES_SERVICES,
+        ListEntitiesServicesResponse {
+            name: "pair".into(),
+            key: PAIR,
+            args: vec![ListEntitiesServicesArgument { name: "secret".into(), r#type: ServiceArgType::String as i32, ..Default::default() }],
+            ..Default::default()
+        },
+    ));
     messages
 }
 
@@ -258,6 +269,17 @@ pub fn handle_button(device: &Device, data: &[u8]) {
         RESTART_KIOSK => device.restart_kiosk(),
         SIGN_IN_AGAIN => device.request_sign_in(),
         _ => {}
+    }
+}
+
+pub fn handle_service(device: &Device, data: &[u8]) {
+    let Ok(request) = ExecuteServiceRequest::decode(data) else {
+        return;
+    };
+    if request.key == PAIR {
+        if let Some(argument) = request.args.first() {
+            device.start_pairing(&argument.string);
+        }
     }
 }
 
