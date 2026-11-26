@@ -40,6 +40,8 @@ make -C ~/src/buildroot O=$HOME/build/br
 - Wi-Fi credentials and the SSH key come from `local/` through `board/wallview/post-build.sh`, the PSK only as a hash.
 - Output `images/rootfs.erofs` (LZ4HC).
 
+Known cost: with `BR2_PACKAGE_MESA3D_LLVM` Mesa also builds gallivm, so `libgallium` links `libLLVM.so` (82 MB) at run time although Panfrost itself only needs LLVM for its build-time shader compiler. To be optimised later (target Mesa without LLVM, host-only precompiler).
+
 The build VM has 8 GB RAM; an 8 GB swap file and `BR2_JLEVEL=4` keep the WebKit build from running out of memory.
 
 ## Data partition
