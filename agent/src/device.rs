@@ -4,6 +4,7 @@ use std::process::Command;
 
 const BACKLIGHT: &str = "/sys/class/backlight/backlight";
 const URL_FILE: &str = "/data/wallview/url";
+const SIGN_IN_FILE: &str = "/data/wallview/sign-in";
 const DEFAULT_URL: &str = "http://homeassistant.local:8123";
 const BL_POWER_ON: &str = "0";
 const BL_POWER_OFF: &str = "4";
@@ -99,6 +100,13 @@ impl Device {
 
     pub fn restart_kiosk(&self) {
         let _ = Command::new("killall").arg("cog").status();
+    }
+
+    pub fn request_sign_in(&self) {
+        let generation = read_number(SIGN_IN_FILE).unwrap_or(0.0) as u64 + 1;
+        if fs::write(SIGN_IN_FILE, format!("{generation}\n")).is_ok() {
+            self.restart_kiosk();
+        }
     }
 
     pub fn reboot(&self) {

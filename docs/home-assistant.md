@@ -53,4 +53,11 @@ password=secret
 
 ## Kiosk login
 
-Improv only transfers Wi-Fi credentials. The dashboard login will be either a one-time login on the panel's own setup screen (touch keyboard, Home Assistant `login_flow` API, code handed to the frontend) or, with no action on the panel, a small WallView integration in Home Assistant that creates access for the kiosk and sends it over the ESPHome API.
+WPE WebKit has no on-screen keyboard, so the Home Assistant login page cannot be used on the panel. The start page (`launcher.html`) signs in itself:
+
+1. Once the dashboard URL answers and the panel is not signed in to that Home Assistant, it shows "Sign in to Home Assistant" with its own touch keyboard (letters, numbers, symbols).
+2. It runs the Home Assistant `login_flow` (`/auth/providers`, `/auth/login_flow`, provider `homeassistant`, client ID `<origin>/`, two-factor code supported). Cog runs with `--allow-universal-access-from-file-urls` so the local page may call Home Assistant without CORS.
+3. With the authorization code it opens the dashboard as `<dashboard>?auth_callback=1&code=…&state=base64({hassUrl, clientId})&storeToken=true`. The Home Assistant frontend exchanges the code for tokens and keeps them in its local storage under `/data/xdg`, exactly as after a normal login with "Keep me logged in".
+4. The launcher remembers in its own local storage that it is signed in to this origin.
+
+The "Sign in again" button in Home Assistant increments `/data/wallview/sign-in` and restarts the kiosk; the launcher then shows the sign-in screen again (for example after the tokens were revoked or to change the user).

@@ -24,6 +24,7 @@ pub const RESTART_KIOSK: u32 = 10;
 pub const DASHBOARD_URL: u32 = 11;
 pub const IP_ADDRESS: u32 = 12;
 pub const VERSION: u32 = 13;
+pub const SIGN_IN_AGAIN: u32 = 14;
 
 pub type Encoded = (u16, Vec<u8>);
 
@@ -101,6 +102,7 @@ pub fn list() -> Vec<Encoded> {
     for (key, object_id, name, icon) in [
         (RESTART_PANEL, "restart", "Restart", ""),
         (RESTART_KIOSK, "restart_kiosk", "Restart kiosk", "mdi:web-refresh"),
+        (SIGN_IN_AGAIN, "sign_in_again", "Sign in again", "mdi:login"),
     ] {
         messages.push(encode(
             message_type::LIST_ENTITIES_BUTTON,
@@ -254,6 +256,7 @@ pub fn handle_button(device: &Device, data: &[u8]) {
     match command.key {
         RESTART_PANEL => device.reboot(),
         RESTART_KIOSK => device.restart_kiosk(),
+        SIGN_IN_AGAIN => device.request_sign_in(),
         _ => {}
     }
 }
