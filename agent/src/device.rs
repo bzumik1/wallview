@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 const BACKLIGHT: &str = "/sys/class/backlight/backlight";
 const URL_FILE: &str = "/data/wallview/url";
@@ -18,6 +20,7 @@ pub struct Device {
     pub name: String,
     pub mac: String,
     light_sensor: Option<PathBuf>,
+    sign_in_requests: Arc<AtomicU64>,
 }
 
 fn read(path: impl AsRef<Path>) -> Option<String> {
@@ -46,6 +49,7 @@ impl Device {
             id,
             mac,
             light_sensor,
+            sign_in_requests: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -109,6 +113,11 @@ impl Device {
         if fs::write(SIGN_IN_FILE, format!("{generation}\n")).is_ok() {
             self.restart_kiosk();
         }
+        self.sign_in_requests.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn sign_in_requests(&self) -> u64 {
+        self.sign_in_requests.load(Ordering::SeqCst)
     }
 
     pub fn start_pairing(&self, secret: &str) {

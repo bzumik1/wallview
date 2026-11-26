@@ -15,7 +15,7 @@ use base64::Engine;
 use prost::Message;
 
 use crate::api::{
-    DeviceInfoResponse, DisconnectResponse, HelloResponse, ListEntitiesDoneResponse,
+    DeviceInfoResponse, DisconnectResponse, HelloResponse, HomeassistantActionRequest, ListEntitiesDoneResponse,
     NoiseEncryptionSetKeyRequest, NoiseEncryptionSetKeyResponse, PingResponse,
 };
 use crate::device::Device;
@@ -26,6 +26,7 @@ const PORT: u16 = 6053;
 const ESPHOME_VERSION: &str = "2025.9.0";
 const SENSOR_INTERVAL: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+const SIGN_IN_REQUESTED_EVENT: &str = "esphome.wallview_sign_in_requested";
 
 pub mod message_type {
     pub const HELLO_REQUEST: u16 = 1;
@@ -50,6 +51,8 @@ pub mod message_type {
     pub const LIST_ENTITIES_SERVICES: u16 = 41;
     pub const EXECUTE_SERVICE_REQUEST: u16 = 42;
     pub const LIGHT_COMMAND_REQUEST: u16 = 32;
+    pub const SUBSCRIBE_HOMEASSISTANT_SERVICES_REQUEST: u16 = 34;
+    pub const HOMEASSISTANT_ACTION_REQUEST: u16 = 35;
     pub const LIST_ENTITIES_BUTTON: u16 = 61;
     pub const BUTTON_COMMAND_REQUEST: u16 = 62;
     pub const LIST_ENTITIES_TEXT: u16 = 97;
@@ -116,6 +119,12 @@ pub fn serve(device: Device, keys: KeyStore) {
     }
 }
 
+#[derive(Default)]
+struct Subscriptions {
+    states: bool,
+    actions: bool,
+}
+
 enum Incoming {
     Message(u16, Vec<u8>),
     Closed(io::Error),
@@ -147,7 +156,8 @@ fn handle_client(
     });
 
     let generation = keys.generation();
-    let mut subscribed = false;
+    let mut subscriptions = Subscriptions::default();
+    let mut sign_in_requests = device.sign_in_requests();
     let mut last_presence = None;
     let mut last_sensors = Instant::now();
     loop {
@@ -157,7 +167,7 @@ fn handle_client(
         }
         match messages.recv_timeout(POLL_INTERVAL) {
             Ok(Incoming::Message(message_type, data)) => {
-                if !handle_message(&sender, device, keys, advertisement, message_type, &data, &mut subscribed)? {
+                if !handle_message(&sender, device, keys, advertisement, message_type, &data, &mut subscriptions)? {
                     return Ok(());
                 }
             }
@@ -167,7 +177,21 @@ fn handle_client(
             Err(RecvTimeoutError::Disconnected) => return Ok(()),
             Err(RecvTimeoutError::Timeout) => {}
         }
-        if !subscribed {
+        if device.sign_in_requests() != sign_in_requests {
+            sign_in_requests = device.sign_in_requests();
+            if subscriptions.actions {
+                send_message(
+                    &sender,
+                    message_type::HOMEASSISTANT_ACTION_REQUEST,
+                    HomeassistantActionRequest {
+                        service: SIGN_IN_REQUESTED_EVENT.into(),
+                        is_event: true,
+                        ..Default::default()
+                    },
+                )?;
+            }
+        }
+        if !subscriptions.states {
             continue;
         }
         if let Some((near, state)) = entities::presence_state(device) {
@@ -196,7 +220,7 @@ fn handle_message(
     advertisement: &Arc<Mutex<Option<mdns::Advertisement>>>,
     message_type: u16,
     data: &[u8],
-    subscribed: &mut bool,
+    subscriptions: &mut Subscriptions,
 ) -> io::Result<bool> {
     use message_type::*;
     match message_type {
@@ -234,8 +258,9 @@ fn handle_message(
             }
             send_message(sender, LIST_ENTITIES_DONE, ListEntitiesDoneResponse::default())?;
         }
+        SUBSCRIBE_HOMEASSISTANT_SERVICES_REQUEST => subscriptions.actions = true,
         SUBSCRIBE_STATES_REQUEST => {
-            *subscribed = true;
+            subscriptions.states = true;
             for (state_type, state) in entities::all_states(device) {
                 sender.send(state_type, &state)?;
             }

@@ -1,22 +1,15 @@
 {
   "config": {
-    "flow_title": "{name}",
+    "flow_title": "Kiosk sign-in for {name}",
     "step": {
       "confirm": {
-        "description": "Sign in the kiosk of {name} to Home Assistant? A Home Assistant user \"WallView\" (no administrator rights, local network only) is created and the panel shows its dashboards without typing a password. Add the panel in ESPHome as well; the sign-in is sent once both are set up."
+        "description": "Sign in the kiosk of {name} to Home Assistant automatically? A Home Assistant user \"WallView\" (no administrator rights, local network only) is created and the panel shows its dashboards without typing a password. The panel itself is a device of the ESPHome integration; add it there as well, the sign-in is sent once both are set up. This integration adds no device of its own. To sign the kiosk in again later, press \"Sign in again\" on the panel's ESPHome device."
       }
     },
     "abort": {
-      "already_configured": "This panel is already signed in.",
+      "already_configured": "Kiosk sign-in is already set up for this panel.",
       "discovery_only": "WallView panels are discovered automatically on the local network.",
       "not_wallview": "This device is not a WallView panel."
-    }
-  },
-  "entity": {
-    "button": {
-      "sign_in_kiosk": {
-        "name": "Sign in kiosk"
-      }
     }
   }
 }

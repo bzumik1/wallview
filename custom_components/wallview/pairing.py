@@ -18,6 +18,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_SERVICE_REGISTERED
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
@@ -141,6 +142,32 @@ class Pairings:
             for secret, pending in self._pending.items()
             if pending.entry_id != entry_id and pending.expires > now
         }
+
+    @callback
+    def entry_for_device(self, device_id: object) -> ConfigEntry | None:
+        if not isinstance(device_id, str):
+            return None
+        device_registry = dr.async_get(self.hass)
+        if (device := device_registry.async_get(device_id)) is None:
+            return None
+        for connection_type, mac in device.connections:
+            if connection_type != dr.CONNECTION_NETWORK_MAC:
+                continue
+            entry = self.hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, dr.format_mac(mac))
+            if entry is None or entry.disabled_by is not None:
+                continue
+            esphome = esphome_entry(self.hass, entry)
+            if esphome is not None and device in dr.async_entries_for_config_entry(device_registry, esphome.entry_id):
+                return entry
+        return None
+
+    async def async_handle_sign_in_request(self, event: Event) -> None:
+        if (entry := self.entry_for_device(event.data.get("device_id"))) is None:
+            return
+        try:
+            await self.async_send(entry)
+        except HomeAssistantError as error:
+            _LOGGER.warning("Could not send the sign-in to %s: %s", entry.title, error)
 
     async def async_send(self, entry: ConfigEntry) -> None:
         if not onboarding.async_is_onboarded(self.hass):

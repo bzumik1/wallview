@@ -8,7 +8,7 @@
 1. The panel announces itself over mDNS as `_esphomelib._tcp` (`wallview-xxxxxx`), advertising `api_encryption_supported` and `api_provisioning=zero-psk` while it has no encryption key.
 2. Home Assistant shows it as a discovered ESPHome device. "Add" is the only step.
 3. Home Assistant first connects without encryption (the panel accepts that only while it has no key), reads the device info and creates the device. It then sees `api_encryption_provisionable`, opens a second connection with the well-known all-zero Noise key, generates a key and sends it base64-encoded (`NoiseEncryptionSetKeyRequest`). The panel stores it in `/data/wallview/api.key`; from then on it accepts only that key, answers unencrypted clients with the ESPHome reject frame (`0x01`, "Bad indicator byte") and advertises `api_encryption`.
-4. With the WallView integration installed (see [Kiosk login](#kiosk-login)), Home Assistant also shows "WallView xxxx" as discovered; "Submit" signs in the kiosk.
+4. With the WallView integration installed (see [Kiosk login](#kiosk-login)), Home Assistant also shows "Kiosk sign-in for WallView xxxx" as discovered; "Submit" signs in the kiosk. This adds no second device: the panel is only a device of the ESPHome integration.
 
 Dashboard URL: as long as `/data/wallview/url` does not exist, the agent looks for Home Assistant over mDNS (`_home-assistant._tcp`, 10 s, again every minute) and writes its `internal_url`, or `http://<IPv4>:<port>` when that is empty; the kiosk then restarts with it. The rootfs has no mDNS name resolution, so `homeassistant.local` (the fallback default) does not resolve on the panel. Tested with Home Assistant 2026.11.3 in the build VM.
 
@@ -31,7 +31,7 @@ The panel identifies itself honestly: manufacturer "WallView", model "Sonoff NSP
 | IP address, WallView version | text sensors, diagnostic | |
 | Restart | button | `reboot` |
 | Restart kiosk | button | restarts Cog |
-| Sign in again | button, config | shows the sign-in screen on the panel again |
+| Sign in again | button, config | signs the kiosk in again: with the WallView integration a new automatic sign-in, otherwise the sign-in screen with the keyboard |
 | `esphome.wallview_xxxxxx_pair` | action (`secret`) | used by the WallView integration, starts the automatic sign-in |
 | Dashboard URL | text, config | `/data/wallview/url`, the kiosk restarts with the new URL |
 
@@ -71,11 +71,15 @@ WPE WebKit has no on-screen keyboard, so the Home Assistant login page cannot be
 5. The start page opens `<Home Assistant>/api/wallview/pair#tokens=…&next=<dashboard>`. That page comes from the Home Assistant origin and takes the tokens from the URL fragment (never sent to a server or logged). It stores them in the frontend's `hassTokens`, exactly like a normal login with "Keep me logged in", and opens the dashboard.
 6. If the code is rejected (expired, Home Assistant restarted, other Home Assistant), the start page shows the touch keyboard sign-in with the reason.
 
-Each panel has its own refresh token (named after the panel, visible on the WallView user's profile). Pairing again replaces it, and removing the panel from the integration revokes it. The button "Sign in kiosk" (WallView integration) repeats the sign-in, for example after the tokens were deleted. Dashboards shown on the panel must be visible to the "WallView" user.
+Each panel has its own refresh token (named after the panel, visible on the WallView user's profile). Pairing again replaces it, and removing the panel from the integration revokes it. Dashboards shown on the panel must be visible to the "WallView" user.
+
+Signing in again: the button "Sign in again" on the panel's ESPHome device makes the agent fire the event `esphome.wallview_sign_in_requested` (ESPHome `HomeassistantActionRequest` with `is_event`, sent on every connection that subscribed to Home Assistant actions; Home Assistant forwards device events without the "allow actions" option and adds the device ID). The integration maps the device ID to the ESPHome device, its MAC address and the approved WallView entry and sends a new one-time code as above. Events for unknown devices are ignored. A device that fakes another panel's device ID can only make that panel receive a code it alone can redeem.
+
+One device per panel: since Home Assistant 2026 a device belongs to exactly one config entry, and devices of different integrations with the same MAC address are no longer merged. The WallView integration therefore has no device and no entities of its own (`integration_type: service`); everything about the panel lives on its ESPHome device. Config entries from version 0.1 of the integration (with a "Sign in kiosk" button on a second device) are migrated: the button and the extra device are removed. This follows a review of how comparable projects do it: devices that speak the ESPHome API (for example linux-voice-assistant) live only in ESPHome; none of them sign a kiosk in, which is the one thing that needs code inside Home Assistant.
 
 After the panel stores its encryption key, the agent closes every open API connection, including unencrypted ones opened before, as ESPHome firmware does.
 
-Tested 2026-11-26 with Home Assistant 2026.11.3 in the build VM, the agent and the start page in Chrome. Covered: discovery, approval before and after adding in ESPHome, key provisioning with a single encrypted connection left, code delivery, rejection from another IP address with fallback to the keyboard, success from the panel address, reuse rejected, token without expiry, the token page signing the frontend in as "WallView", token replaced on re-pairing. An earlier version was reviewed by Fable 5.2; its findings are fixed in this design.
+Tested 2026-11-26 with Home Assistant 2026.11.3 in the build VM: migration from 0.1 (button and second device removed, only the ESPHome device left), "Sign in again" on the ESPHome device delivering a new code to `/data/wallview/pairing`, an event with an unknown device ID ignored. Earlier the same day with the agent and the start page in Chrome. Covered: discovery, approval before and after adding in ESPHome, key provisioning with a single encrypted connection left, code delivery, rejection from another IP address with fallback to the keyboard, success from the panel address, reuse rejected, token without expiry, the token page signing the frontend in as "WallView", token replaced on re-pairing. An earlier version was reviewed by Fable 5.2; its findings are fixed in this design.
 
 ### Manual: touch keyboard
 
