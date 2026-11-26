@@ -21,3 +21,9 @@ if [ -f "$LOCAL/ssh/authorized_keys" ]; then
 	install -d -m 0700 "$TARGET/root/.ssh"
 	install -m 0600 "$LOCAL/ssh/authorized_keys" "$TARGET/root/.ssh/authorized_keys"
 fi
+
+CARGO=$HOME/.cargo/bin/cargo
+if [ -x "$CARGO" ]; then
+	CARGO_TARGET_DIR=$HOME/build/agent-target "$CARGO" build --release --manifest-path "$WALLVIEW/agent/Cargo.toml"
+	install -D -m 0755 "$HOME/build/agent-target/release/wallview-agent" "$TARGET/usr/bin/wallview-agent"
+fi

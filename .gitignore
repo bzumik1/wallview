@@ -9,3 +9,4 @@ maskrom-loader/
 log/
 .DS_Store
 out-*/
+/agent/target/
