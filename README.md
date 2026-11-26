@@ -15,7 +15,7 @@ Mainline Linux 6.18 runs on an NSPanel Pro 86 (Gen1) with the original bootloade
 | Display 480×480 (ST7701S, MIPI DSI) | own `panel-itead-nspanel-pro` | works |
 | Backlight | `pwm-backlight` | works |
 | GPU Mali-G31 | Panfrost | driver loads; Mesa in progress |
-| Touch controller CST226SE | `hynitron_cstxxx` + patch | probes; events untested (panel cable unplugged) |
+| Touch CST226SE | `hynitron_cstxxx` + patch | works (multi-touch, correct orientation) |
 | Wi-Fi RTL8723DS | `rtw88_8723ds` | works |
 | Bluetooth RTL8723DS | `hci_uart` H5 + `btrtl` | works (vendor firmware) |
 | Light/proximity sensor | `stk3310` | works |

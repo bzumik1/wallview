@@ -128,3 +128,8 @@ While the Buildroot WebKit build was still running (it needs about 3 GB per comp
 - The start page (`launcher.html`) loads in about 1.3 s and switches to Home Assistant once it answers.
 - Cog's default DRM renderer `modeset` crashed (SIGSEGV) while loading Home Assistant. With `--platform-params=renderer=gles` Home Assistant loads and shows its login page; Panfrost handles the GPU jobs. Cog with two web processes uses about 340 MB of RAM.
 - The kiosk script now uses the `gles` renderer.
+
+## 2026-11-26 – panel 2 assembled: autoboot on mains, touch
+
+- Panel assembled and powered from mains: autoboot into WallView (primary slot) without any button. Reboot to SSH takes 34 s: about 19 s vendor U-Boot plus loader, 15 s WallView kernel (Wi-Fi associated at 10.9 s). The loader stage is the main target for boot time optimisation.
+- Touch works with the mainline `hynitron_cstxxx` driver and our CST226SE patch: 2135 interrupts and 56 touch-downs in 30 s, multi-touch events on `event0`. Corner taps: top left X≈8 Y≈36, bottom right X≈469 Y≈472, so no axis swap or inversion is needed. (Earlier "no touch" results were simply captures while nobody touched the screen.)
