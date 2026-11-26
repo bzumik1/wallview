@@ -84,7 +84,7 @@ jobs:
       - name: Build
         run: |
           make -s -C "$HOME/buildroot" O="$HOME/br" BR2_EXTERNAL="$GITHUB_WORKSPACE/buildroot" wallview_defconfig
-          timeout 315m make -C "$HOME/buildroot" O="$HOME/br" BR2_EXTERNAL="$GITHUB_WORKSPACE/buildroot" BR2_JLEVEL=4 > build.log 2>&1 || {
+          timeout 315m make -C "$HOME/buildroot" O="$HOME/br" BR2_EXTERNAL="$GITHUB_WORKSPACE/buildroot" BR2_JLEVEL=4 2>&1 | tee build.log | grep --line-buffered '^>>>' || {
             status=$?
             tail -60 build.log
             exit $status
