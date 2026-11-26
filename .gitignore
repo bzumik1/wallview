@@ -10,3 +10,4 @@ log/
 .DS_Store
 out-*/
 /agent/target/
+__pycache__/
