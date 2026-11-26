@@ -56,6 +56,8 @@ The build VM has 8 GB RAM; an 8 GB swap file and `BR2_JLEVEL=4` keep the WebKit 
 
 A slot update never writes beyond 320 MiB, so `/data` survives updates.
 
+From the Mac, `tools/panel-config.sh <panel-ip> show|url|language|cog-args|mqtt …` writes these files and restarts the kiosk or the agent. The MQTT password is read from a local file so it does not appear on the command line.
+
 ## Building and installing a full slot
 
 ```
