@@ -7,9 +7,23 @@
       }
     },
     "abort": {
-      "already_configured": "Přihlašování kiosku je pro tento panel už nastavené.",
+      "already_configured": "Zařízení je už nastavené",
       "discovery_only": "Panely WallView se v místní síti najdou automaticky.",
       "not_wallview": "Toto zařízení není panel WallView."
+    }
+  },
+  "exceptions": {
+    "not_onboarded": {
+      "message": "Home Assistant ještě není nastavený."
+    },
+    "esphome_missing": {
+      "message": "Nejdřív přidej {name} v ESPHome."
+    }
+  },
+  "issues": {
+    "esphome_missing": {
+      "title": "Přidej {name} v ESPHome",
+      "description": "Přihlašování kiosku {name} je schválené, ale panel ještě není nastavený v integraci ESPHome. Přidej nalezený panel v ESPHome; kiosek se přihlásí, jakmile bude připojený."
     }
   }
 }

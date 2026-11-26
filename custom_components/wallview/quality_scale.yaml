@@ -1,0 +1,132 @@
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: The integration registers no actions.
+  appropriate-polling:
+    status: exempt
+    comment: The integration does not poll.
+  brands: done
+  common-modules: done
+  config-flow: done
+  config-flow-test-coverage: done
+  dependency-transparency:
+    status: exempt
+    comment: No third-party library is used; the panel is reached through the ESPHome integration.
+  docs-actions:
+    status: exempt
+    comment: The integration registers no actions.
+  docs-conditions:
+    status: exempt
+    comment: The integration provides no conditions.
+  docs-high-level-description:
+    status: done
+    comment: docs/home-assistant.md in the WallView repository.
+  docs-installation-instructions:
+    status: done
+    comment: docs/home-assistant.md in the WallView repository.
+  docs-removal-instructions:
+    status: done
+    comment: docs/home-assistant.md in the WallView repository.
+  docs-triggers:
+    status: exempt
+    comment: The integration provides no triggers.
+  entity-event-setup:
+    status: exempt
+    comment: The integration has no entities.
+  entity-unique-id:
+    status: exempt
+    comment: The integration has no entities.
+  has-entity-name:
+    status: exempt
+    comment: The integration has no entities.
+  runtime-data:
+    status: exempt
+    comment: The only state is domain wide (pending sign-in codes shared by the HTTP view); entries hold no runtime data.
+  test-before-configure:
+    status: exempt
+    comment: There is no connection to test; the panel is connected through the ESPHome integration.
+  test-before-setup:
+    status: exempt
+    comment: There is no connection to test; the panel is connected through the ESPHome integration.
+  unique-config-entry: done
+
+  # Silver
+  action-exceptions:
+    status: exempt
+    comment: The integration registers no actions.
+  config-entry-unloading: done
+  docs-configuration-parameters:
+    status: exempt
+    comment: The integration has no options.
+  docs-installation-parameters:
+    status: exempt
+    comment: The config flow has no fields; it only asks for approval.
+  entity-unavailable:
+    status: exempt
+    comment: The integration has no entities.
+  integration-owner: done
+  log-when-unavailable:
+    status: exempt
+    comment: The integration does not connect to the panel itself.
+  parallel-updates:
+    status: exempt
+    comment: The integration has no entity platforms.
+  reauthentication-flow:
+    status: exempt
+    comment: The integration has no credentials of its own.
+  test-coverage: done
+
+  # Gold
+  devices:
+    status: exempt
+    comment: The panel is a device of the ESPHome integration; since Home Assistant 2026 a device belongs to one config entry, so this integration adds none.
+  diagnostics: todo
+  discovery: done
+  discovery-update-info:
+    status: exempt
+    comment: The panel's address is taken from the ESPHome config entry whenever it is needed.
+  docs-data-update:
+    status: exempt
+    comment: The integration fetches no data.
+  docs-examples: todo
+  docs-known-limitations: done
+  docs-supported-devices: done
+  docs-supported-functions: done
+  docs-troubleshooting: todo
+  docs-use-cases: done
+  dynamic-devices:
+    status: exempt
+    comment: The integration has no devices.
+  entity-category:
+    status: exempt
+    comment: The integration has no entities.
+  entity-device-class:
+    status: exempt
+    comment: The integration has no entities.
+  entity-disabled-by-default:
+    status: exempt
+    comment: The integration has no entities.
+  entity-translations:
+    status: exempt
+    comment: The integration has no entities.
+  exception-translations: done
+  icon-translations:
+    status: exempt
+    comment: The integration has no entities.
+  reconfiguration-flow:
+    status: exempt
+    comment: The config flow has no settings to change.
+  repair-issues: done
+  stale-devices:
+    status: exempt
+    comment: The integration has no devices.
+
+  # Platinum
+  async-dependency:
+    status: exempt
+    comment: No third-party library is used.
+  inject-websession:
+    status: exempt
+    comment: No third-party library is used.
+  strict-typing: done

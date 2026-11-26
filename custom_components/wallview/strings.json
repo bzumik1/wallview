@@ -7,9 +7,23 @@
       }
     },
     "abort": {
-      "already_configured": "Kiosk sign-in is already set up for this panel.",
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
       "discovery_only": "WallView panels are discovered automatically on the local network.",
       "not_wallview": "This device is not a WallView panel."
+    }
+  },
+  "exceptions": {
+    "not_onboarded": {
+      "message": "Home Assistant is not onboarded yet."
+    },
+    "esphome_missing": {
+      "message": "Add {name} in ESPHome first."
+    }
+  },
+  "issues": {
+    "esphome_missing": {
+      "title": "Add {name} in ESPHome",
+      "description": "Kiosk sign-in for {name} is approved, but the panel is not set up in the ESPHome integration yet. Add the discovered panel in ESPHome; the kiosk is signed in as soon as it is connected."
     }
   }
 }

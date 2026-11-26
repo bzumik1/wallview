@@ -5,6 +5,9 @@
     "esphome",
     "onboarding"
   ],
+  "categories": [
+    "computers_network"
+  ],
   "codeowners": [
     "@bzumik1"
   ],
@@ -16,6 +19,7 @@
   "integration_type": "service",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/bzumik1/wallview/issues",
+  "quality_scale": "bronze",
   "version": "0.2.0",
   "zeroconf": [
     {
