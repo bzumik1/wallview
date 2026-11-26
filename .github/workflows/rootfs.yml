@@ -79,7 +79,8 @@ jobs:
       - name: Mark restored packages as built
         if: steps.output.outputs.cache-hit == 'true'
         run: |
-          find "$HOME/br/build" -name '.stamp_*' -exec touch {} +
+          now=$(date +%s)
+          find "$HOME/br/build" -name '.stamp_*' -exec touch -d "@$now" {} +
           du -sh "$HOME/br"
 
       - name: Build
