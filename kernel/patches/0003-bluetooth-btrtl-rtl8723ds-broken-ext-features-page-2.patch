@@ -1,0 +1,15 @@
+diff --git a/drivers/bluetooth/btrtl.c b/drivers/bluetooth/btrtl.c
+index 564ed584c..44b1c6902 100644
+--- a/drivers/bluetooth/btrtl.c
++++ b/drivers/bluetooth/btrtl.c
+@@ -1350,6 +1350,10 @@ void btrtl_set_quirks(struct hci_dev *hdev, struct btrtl_device_info *btrtl_dev)
+ 		 */
+ 		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_LOCAL_EXT_FEATURES_PAGE_2);
+ 		break;
++	case RTL_ROM_LMP_8723B:
++		if (btrtl_dev->project_id == CHIP_ID_8723D)
++			hci_set_quirk(hdev, HCI_QUIRK_BROKEN_LOCAL_EXT_FEATURES_PAGE_2);
++		break;
+ 	default:
+ 		break;
+ 	}

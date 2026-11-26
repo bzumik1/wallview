@@ -52,7 +52,7 @@ Mainline Linux 6.18 runs on an NSPanel Pro 86 (Gen1) with the original bootloade
 | `docs/` | plan, findings, board notes, photos |
 | `kernel/dts/` | mainline board device tree (work in progress) |
 | `kernel/config/` | kernel configuration fragment merged on top of `defconfig` |
-| `kernel/patches/` | kernel patches (display panel driver) |
+| `kernel/patches/` | kernel patches (display panel driver, touch, Bluetooth quirk) |
 | `initramfs/` | initramfs `init` (loader, rescue system, switch to the root file system), `wallview-boot`, DHCP script |
 | `buildroot/` | Buildroot `BR2_EXTERNAL` tree for the WallView OS root file system |
 | `agent/` | `wallview-agent`: Home Assistant integration over the ESPHome native API, optional MQTT (Rust) |
