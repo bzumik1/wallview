@@ -77,7 +77,7 @@ limactl shell wallview -- bash ~/WallView/tools/build-slot.sh
 IMAGE=~/WallView/out/wallview-primary.img ~/WallView/tools/install-panel.sh <panel-ip> primary
 ```
 
-then `reboot -f` on the panel, check, and `wallview-boot promote` (copies only the boot image to `golden`, which therefore stays a rescue system).
+then `reboot -f` on the panel (from a running Buildroot system the script goes through `golden` and reboots by itself, see the bring-up guide), check, and `wallview-boot promote` (copies only the boot image to `golden`, which therefore stays a rescue system).
 
 With the root file system from CI (GitHub Actions, `.github/workflows/rootfs.yml`, artifact `wallview-rootfs`) instead of a local Buildroot build:
 

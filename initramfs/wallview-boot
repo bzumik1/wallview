@@ -68,6 +68,10 @@ write_verified() {
 install_image() {
 	partition=$(slot_partition "$1")
 	[ -n "$partition" ] || { echo "partition for $1 not found" >&2; exit 1; }
+	if [ "$1" = primary ] && grep -q " / erofs " /proc/mounts; then
+		echo "running from the primary slot, run 'wallview-boot rescue', reboot and install from the rescue system" >&2
+		exit 1
+	fi
 	[ "$(sha256sum "$2" | cut -d' ' -f1)" = "$3" ] || { echo "image checksum mismatch, not written" >&2; exit 1; }
 	[ "$(dd if="$2" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] || { echo "not an Android boot image" >&2; exit 1; }
 	if [ "$1" = primary ] && [ "$(wc -c < "$2")" -gt $((320 * 1048576)) ]; then
@@ -101,6 +105,9 @@ android)
 reset)
 	write_tries 0
 	;;
+rescue)
+	write_tries 99
+	;;
 install)
 	install_image "$2" "$3" "$4"
 	;;
@@ -114,7 +121,7 @@ status)
 	done
 	;;
 *)
-	echo "usage: wallview-boot linux|android|reset|status|promote|install <loader|primary|golden> <image> <sha256>" >&2
+	echo "usage: wallview-boot linux|android|reset|rescue|status|promote|install <loader|primary|golden> <image> <sha256>" >&2
 	exit 2
 	;;
 esac

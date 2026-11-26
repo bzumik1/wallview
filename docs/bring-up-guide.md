@@ -196,15 +196,18 @@ Commands on the panel (`wallview-boot`):
 | `wallview-boot linux` | write BCB `boot-recovery` (autoboot WallView) |
 | `wallview-boot android` | clear BCB (next boot is Android, which restores the stock `recovery`; coming back needs Loader mode) |
 | `wallview-boot reset` | counter to 0 |
+| `wallview-boot rescue` | counter to 99: the next boots start `golden` until `reset` |
 | `wallview-boot install <loader\|primary\|golden> <image> <sha256>` | write an image to a slot and verify it by reading back |
 | `wallview-boot promote` | copy `primary` to `golden` and verify |
 
-From the Mac, `tools/install-panel.sh <panel-ip> <loader|primary|golden>` uploads `out/recovery-wallview.img` and runs `wallview-boot install`.
+From the Mac, `tools/install-panel.sh <panel-ip> <loader|primary|golden>` uploads `out/recovery-wallview.img` (or `IMAGE=…`) and the repository's `wallview-boot`, and runs `wallview-boot install` with it.
+
+Never write `primary` while the system runs from the root file system in that slot: the EROFS changes under the running system, programs fail with "Structure needs cleaning" and even SSH stops working (happened once on 2026-11-26, a power cycle was needed). `wallview-boot install primary` therefore refuses when `/` is EROFS. `install-panel.sh` handles it: it runs `wallview-boot rescue`, reboots into `golden`, installs, runs `wallview-boot reset` and reboots into the new `primary`.
 
 Update procedure:
 
 1. Build and test with `kexec-panel.sh` (only in RAM).
-2. `install-panel.sh <ip> primary`, then `reboot -f` on the panel: the loader starts the new `primary`.
+2. `install-panel.sh <ip> primary`, then `reboot -f` on the panel (done by the script when it went through `golden`): the loader starts the new `primary`.
 3. Check display, Wi-Fi and `wallview-boot status` (counter back to 0 after about a minute).
 4. `wallview-boot promote`.
 
