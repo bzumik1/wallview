@@ -1,0 +1,32 @@
+From: WallView
+Subject: [PATCH] Style: compare custom property values by pointer first
+
+Style resolution compares custom property maps for every element
+(RenderStyle::deduplicateCustomProperties, StyleRareInheritedData
+equality). Home Assistant defines several hundred custom properties on
+:root; the values are usually the same shared objects, but every
+comparison walked their parsed tokens. Check pointer equality before the
+deep comparison.
+
+Upstream-Status: Pending
+---
+--- a/Source/WebCore/rendering/style/StyleCustomPropertyData.cpp	2026-11-27 00:53:00.649079933 +0100
++++ b/Source/WebCore/rendering/style/StyleCustomPropertyData.cpp	2026-11-27 00:53:06.748098388 +0100
+@@ -104,7 +104,7 @@
+ 
+         for (auto& entry : m_ownValues) {
+             auto* otherValue = other.m_ownValues.get(entry.key);
+-            if (!otherValue || *entry.value != *otherValue)
++            if (!otherValue || (entry.value.get() != otherValue && *entry.value != *otherValue))
+                 return false;
+         }
+         return true;
+@@ -113,7 +113,7 @@
+     bool isEqual = true;
+     forEachInternal([&](auto& entry) {
+         auto* otherValue = other.get(entry.key);
+-        if (!otherValue || *entry.value != *otherValue) {
++        if (!otherValue || (entry.value.get() != otherValue && *entry.value != *otherValue)) {
+             isEqual = false;
+             return IterationStatus::Done;
+         }
