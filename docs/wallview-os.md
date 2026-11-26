@@ -18,11 +18,13 @@ All other partitions (Android `boot`, `system`, `vendor`, `userdata`, ITEAD `oem
 1. The vendor U-Boot reads BCB `boot-recovery` and boots `recovery` with the vendor DTB.
 2. Loader stage (`initramfs/init`, vendor DTB detected): increments the boot counter, picks `primary` or `golden`, extracts kernel, ramdisk and our DTB from the slot and `kexec`s into it with `wallview.slot=<slot>`.
 3. WallView stage of the initramfs (our DTB): starts the watchdog daemon. In the `primary` slot it looks for an EROFS super block at 64 MiB of `cache`; if found it mounts it read-only, moves `/dev`, `/proc`, `/sys` and `switch_root`s into the Buildroot system. Otherwise (and always in `golden`, or with `wallview.rescue=1`) it stays in the **rescue system**: Wi-Fi, SSH, logs.
-4. Buildroot system (busybox init, eudev): `S05wallview-data` mounts `/data`, `S20wallview-devices` sets audio and the light sensor, `S30wallview-time` starts NTP, `S40wallview-network` starts Wi-Fi (`/data/wallview/wpa_supplicant.conf`, else a built-in `/etc/wpa_supplicant.conf`), `S40bluetoothd` BlueZ, `S50dropbear` SSH, `S60wallview-agent` the Home Assistant agent, `S95wallview-health` resets the boot counter one minute after the network is up, `S99wallview-kiosk` runs Cog.
+4. Buildroot system (busybox init, eudev): `S05wallview-data` mounts `/data`, `S20wallview-devices` sets audio and the light sensor, `S30wallview-time` starts NTP, `S40wallview-network` starts Wi-Fi (`/data/wallview/wpa_supplicant.conf`, else a built-in `/etc/wpa_supplicant.conf`, which exists only in local builds with `local/wifi` or with `DEV_FILES=1`; Buildroot's example file that joins any open network is removed; each start is logged to `/data/wallview/network.log`), `S40bluetoothd` BlueZ, `S50dropbear` SSH, `S60wallview-agent` the Home Assistant agent, `S95wallview-health` resets the boot counter one minute after the network is up, `S99wallview-kiosk` runs Cog.
+
+Network interface names stay the kernel names (`wlan0`, `usb0`): the overlay masks eudev's `80-net-name-slot.rules` with a link to `/dev/null`, otherwise coldplug renames the not yet configured `wlan0` and the Wi-Fi script does not find it.
 
 ## Kiosk
 
-Cog runs on DRM/KMS without a compositor and is restarted if it exits. It first opens `/usr/share/wallview/launcher.html` (start and offline screen in the design kit style: logo, clock and date once the time is synchronized, connection status). The page tries the dashboard URL every 5 seconds and switches to it as soon as it answers. Font: Inter (OFL, `usr/share/wallview/fonts/`). Time zone Europe/Prague, locales `en_US` and `cs_CZ`.
+Cog runs on DRM/KMS without a compositor and is restarted if it exits. It first opens `/usr/share/wallview/launcher.html` (start and offline screen in the design kit style: logo, clock and date once the time is synchronized, connection status). The page tries the dashboard URL every 5 seconds and switches to it as soon as it answers. Font: Inter (OFL, `usr/share/wallview/fonts/`). Time zone Europe/Prague, locales `en_US` and `cs_CZ`. WebKit takes the type of `file://` pages from the shared MIME database (`shared-mime-info`, only `mime.cache` on the target); without it the launcher is shown as plain text.
 
 The watchdog daemon started by the initramfs keeps running after `switch_root`.
 
@@ -58,6 +60,7 @@ The large unified WebCore sources need 2–3 GB per compiler process. With an 8 
 | `/data/wallview/language` | locale for WebKit and the start screen, e.g. `cs_CZ.UTF-8` (default `en_US.UTF-8`) |
 | `/data/wallview/wpa_supplicant.conf` | Wi-Fi network written by Improv (SSID in hex, PSK as hash) |
 | `/data/wallview/api.key` | ESPHome API encryption key provisioned by Home Assistant |
+| `/data/wallview/network.log` | Wi-Fi start log (configuration used, missing `wlan0` with the interfaces present) |
 | `/data/wallview/ssh/authorized_keys` | SSH keys when the image has none built in (development only) |
 | `/data/wallview/mqtt.conf` | MQTT broker for `wallview-agent`, see [Home Assistant integration](home-assistant.md) |
 | `/data/xdg/` | WebKit data (local storage with the Home Assistant login, cookies, cache) |

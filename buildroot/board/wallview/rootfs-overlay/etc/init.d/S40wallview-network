@@ -2,6 +2,12 @@
 
 DATA_CONFIG=/data/wallview/wpa_supplicant.conf
 BUILTIN_CONFIG=/etc/wpa_supplicant.conf
+LOG=/data/wallview/network.log
+
+log() {
+	echo "network: $1"
+	[ -d /data/wallview ] && echo "$(cut -d' ' -f1 /proc/uptime) $1" >> "$LOG"
+}
 
 wait_for_wlan() {
 	for attempt in $(seq 1 30); do
@@ -23,10 +29,11 @@ start() {
 		wait_for_wlan && break
 		reset_sdio
 	done
-	wait_for_wlan || { echo "network: wlan0 missing"; return 1; }
+	wait_for_wlan || { log "wlan0 missing, interfaces: $(ip -o link | cut -d: -f2 | tr -d '\n')"; return 1; }
 	config=$DATA_CONFIG
 	[ -f "$config" ] || config=$BUILTIN_CONFIG
-	[ -f "$config" ] || { echo "network: no Wi-Fi configured"; return 0; }
+	[ -f "$config" ] || { log "no Wi-Fi configured"; return 0; }
+	log "starting with $config"
 	mkdir -p /run/wpa_supplicant
 	ip link set wlan0 up
 	iw dev wlan0 set power_save off 2>/dev/null

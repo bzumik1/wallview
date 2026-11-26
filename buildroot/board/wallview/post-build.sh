@@ -21,6 +21,8 @@ if [ -f "$LOCAL/wifi/ssid" ] && [ -f "$LOCAL/wifi/psk" ]; then
 		tr -d '\r\n' < "$LOCAL/wifi/psk" | wpa_passphrase "$ssid" | grep -v '^[[:space:]]*#psk='
 	} > "$TARGET/etc/wpa_supplicant.conf"
 	chmod 0600 "$TARGET/etc/wpa_supplicant.conf"
+else
+	rm -f "$TARGET/etc/wpa_supplicant.conf"
 fi
 
 rm -rf "$TARGET/root/.ssh"
