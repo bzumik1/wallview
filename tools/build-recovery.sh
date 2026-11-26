@@ -6,7 +6,7 @@ LINUX=${LINUX:-$HOME/src/linux}
 OUT=${OUT:-$WALLVIEW/out}
 DTS_NAME=px30-itead-nspanel-pro
 ROCKCHIP_DTS=$LINUX/arch/arm64/boot/dts/rockchip
-CMDLINE="console=ttyS2,1500000n8 console=tty0 earlycon=uart8250,mmio32,0xff160000 rdinit=/init loglevel=7 ignore_loglevel panic=5 watchdog.open_timeout=180 fbcon=logo-count:1 fbcon=logo-pos:center vt.global_cursor_default=0 ${WALLVIEW_EXTRA_CMDLINE:-}"
+CMDLINE="console=ttyS2,1500000n8 console=tty0 earlycon=uart8250,mmio32,0xff160000 rdinit=/init loglevel=7 ignore_loglevel panic=5 watchdog.open_timeout=180 cpufreq.default_governor=performance fbcon=logo-count:1 fbcon=logo-pos:center vt.global_cursor_default=0 ${WALLVIEW_EXTRA_CMDLINE:-}"
 
 mkdir -p "$OUT"
 

@@ -21,6 +21,7 @@ kiosk_loop() {
 		rm -f /data/wallview/pairing
 		export LANG=$(cat /data/wallview/language 2>/dev/null || echo en_US.UTF-8)
 		cog --platform=drm --platform-params=renderer=gles --cookie-store=always --device-scale=1.5 \
+			--web-extensions-dir=/usr/lib/wallview/web-extensions \
 			--allow-file-access-from-file-urls=true --allow-universal-access-from-file-urls=true \
 			$extra "file:///usr/share/wallview/launcher.html?sign-in=$generation&pairing=$pairing#$url" >> /tmp/cog.log 2>&1
 		sleep 2

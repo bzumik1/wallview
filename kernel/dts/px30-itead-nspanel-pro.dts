@@ -129,6 +129,14 @@
 	cpu-supply = <&vdd_arm>;
 };
 
+&cpu0_opp_table {
+	opp-1416000000 {
+		opp-hz = /bits/ 64 <1416000000>;
+		opp-microvolt = <1350000 1350000 1350000>;
+		clock-latency-ns = <40000>;
+	};
+};
+
 &display_subsystem {
 	status = "okay";
 };
