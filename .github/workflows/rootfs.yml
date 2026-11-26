@@ -57,7 +57,7 @@ jobs:
 
       - name: Compute Buildroot output cache key
         id: key
-        run: echo "output=br-output-v1-$BUILDROOT_VERSION-${{ hashFiles('buildroot/configs/**', 'buildroot/Config.in', 'buildroot/external.mk', 'buildroot/external.desc') }}" >> "$GITHUB_OUTPUT"
+        run: echo "output=br-output-v1-$BUILDROOT_VERSION-${{ hashFiles('buildroot/configs/**', 'buildroot/board/wallview/busybox.fragment', 'buildroot/Config.in', 'buildroot/external.mk', 'buildroot/external.desc') }}" >> "$GITHUB_OUTPUT"
 
       - name: Restore Buildroot output
         id: output
