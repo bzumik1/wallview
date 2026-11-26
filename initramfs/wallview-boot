@@ -57,7 +57,7 @@ write_verified() {
 	source=$1
 	partition=$2
 	checksum=$3
-	size=$(stat -c %s "$source")
+	size=$(wc -c < "$source")
 	[ "$size" -le "$(($(cat "/sys/class/block/$partition/size") * 512))" ] || { echo "image larger than $partition" >&2; exit 1; }
 	dd if="$source" of="/dev/$partition" bs=1M conv=fsync 2>/dev/null
 	sync
@@ -70,7 +70,7 @@ install_image() {
 	[ -n "$partition" ] || { echo "partition for $1 not found" >&2; exit 1; }
 	[ "$(sha256sum "$2" | cut -d' ' -f1)" = "$3" ] || { echo "image checksum mismatch, not written" >&2; exit 1; }
 	[ "$(dd if="$2" bs=8 count=1 2>/dev/null)" = "ANDROID!" ] || { echo "not an Android boot image" >&2; exit 1; }
-	if [ "$1" = primary ] && [ "$(stat -c %s "$2")" -gt $((320 * 1048576)) ]; then
+	if [ "$1" = primary ] && [ "$(wc -c < "$2")" -gt $((320 * 1048576)) ]; then
 		echo "primary image larger than 320 MiB would overwrite /data" >&2
 		exit 1
 	fi
