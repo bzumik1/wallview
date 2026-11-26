@@ -213,6 +213,7 @@ start_wifi() {
 	done
 	wait_for_wlan || return
 	mkdir -p /run/wpa_supplicant /etc/dropbear /var/run
+	ip link set lo up
 	ip link set wlan0 up
 	wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf
 	udhcpc -i wlan0 -b -x hostname:wallview -s /etc/udhcpc.script -p /run/udhcpc.pid

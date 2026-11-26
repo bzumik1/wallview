@@ -1,0 +1,1 @@
+`api.proto` and `api_options.proto` are taken unchanged from [aioesphomeapi](https://github.com/esphome/aioesphomeapi) (MIT License, Copyright (c) 2018 Otto Winter), the client library Home Assistant uses for the ESPHome native API.

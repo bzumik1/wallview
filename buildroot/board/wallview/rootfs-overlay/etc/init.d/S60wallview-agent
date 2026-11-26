@@ -1,9 +1,7 @@
 #!/bin/sh
 
-CONFIG=/data/wallview/mqtt.conf
-
 agent_loop() {
-	while [ -f "$CONFIG" ]; do
+	while true; do
 		wallview-agent >> /tmp/wallview-agent.log 2>&1
 		sleep 5
 	done

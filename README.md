@@ -28,7 +28,7 @@ Mainline Linux 6.18 runs on an NSPanel Pro 86 (Gen1) with the original bootloade
 | 0 · Preparation | done |
 | 1 · Bootloader and kernel | nearly done; vendor U-Boot kept, own bootloader later |
 | 2 · System and kiosk | in progress: Buildroot root file system with WPE WebKit/Cog building, boot flow, start screen |
-| 3 · Home Assistant integration | in progress: `wallview-agent` (MQTT discovery) works against a test broker |
+| 3 · Home Assistant integration | in progress: `wallview-agent` speaks the ESPHome native API (mDNS, Noise, key provisioning, 13 entities), tested with aioesphomeapi |
 | 4 · User experience | started: boot logo, start/offline screen |
 | 5–9 | not started |
 
@@ -55,7 +55,7 @@ Mainline Linux 6.18 runs on an NSPanel Pro 86 (Gen1) with the original bootloade
 | `kernel/patches/` | kernel patches (display panel driver) |
 | `initramfs/` | initramfs `init` (loader, rescue system, switch to the root file system), `wallview-boot`, DHCP script |
 | `buildroot/` | Buildroot `BR2_EXTERNAL` tree for the WallView OS root file system |
-| `agent/` | `wallview-agent`: Home Assistant integration over MQTT (Rust) |
+| `agent/` | `wallview-agent`: Home Assistant integration over the ESPHome native API, optional MQTT (Rust) |
 | `tools/` | Android boot image builder, test image build script, kexec deploy scripts |
 | `reference/vendor/` | decompiled vendor device tree used as hardware reference |
 

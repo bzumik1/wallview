@@ -1,13 +1,21 @@
 [package]
 name = "wallview-agent"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
-description = "Home Assistant integration of the WallView panel over MQTT"
+description = "Home Assistant integration of the WallView panel: ESPHome native API, optional MQTT"
 
 [dependencies]
+base64 = "0.22"
+mdns-sd = "0.13"
+prost = "0.13"
 rumqttc = { version = "0.24", default-features = false }
 serde_json = "1"
+snow = "0.9"
+
+[build-dependencies]
+prost-build = "0.13"
+protox = "0.7"
 
 [profile.release]
 opt-level = "s"
