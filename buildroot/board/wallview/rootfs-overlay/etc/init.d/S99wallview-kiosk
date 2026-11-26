@@ -6,9 +6,12 @@ kiosk_loop() {
 	export HOME=/data/home
 	export XDG_RUNTIME_DIR=/run/cog
 	export XDG_DATA_HOME=/data/xdg/data
-	export XDG_CACHE_HOME=/data/xdg/cache
+	export XDG_CACHE_HOME=/tmp/wallview-cache
 	export XDG_CONFIG_HOME=/data/xdg/config
-	mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME"
+	export MESA_SHADER_CACHE_DIR=/data/xdg/mesa-shader-cache
+	export MESA_SHADER_CACHE_MAX_SIZE=16M
+	rm -rf /data/xdg/cache
+	mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$MESA_SHADER_CACHE_DIR"
 	chmod 0700 "$XDG_RUNTIME_DIR"
 	while true; do
 		url=$(cat /data/wallview/url 2>/dev/null || echo "$DEFAULT_URL")
@@ -17,7 +20,7 @@ kiosk_loop() {
 		pairing=$(cat /data/wallview/pairing 2>/dev/null)
 		rm -f /data/wallview/pairing
 		export LANG=$(cat /data/wallview/language 2>/dev/null || echo en_US.UTF-8)
-		cog --platform=drm --platform-params=renderer=gles --cookie-store=always \
+		cog --platform=drm --platform-params=renderer=gles --cookie-store=always --device-scale=1.5 \
 			--allow-file-access-from-file-urls=true --allow-universal-access-from-file-urls=true \
 			$extra "file:///usr/share/wallview/launcher.html?sign-in=$generation&pairing=$pairing#$url" >> /tmp/cog.log 2>&1
 		sleep 2
