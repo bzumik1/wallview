@@ -63,4 +63,9 @@ Backups, firmware dumps and build outputs are intentionally excluded (`.gitignor
 
 ## Licence
 
-Not decided yet (see the plan: GPL-2.0 for kernel parts, MIT or Apache-2.0 for userspace).
+MIT (`LICENSE`), with these exceptions:
+
+- `kernel/patches/`: GPL-2.0, like the Linux kernel they apply to.
+- `kernel/dts/`: GPL-2.0-or-later OR MIT, as stated in the file header (the usual licence of Linux device trees).
+- `agent/proto/`: from aioesphomeapi, MIT, unchanged.
+- `reference/vendor/`: decompiled from the vendor firmware, kept only as a hardware reference.

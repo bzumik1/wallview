@@ -352,6 +352,7 @@
 		reset-gpios = <&gpio0 RK_PB4 GPIO_ACTIVE_LOW>;
 		touchscreen-size-x = <480>;
 		touchscreen-size-y = <480>;
+		touchscreen-swapped-x-y;
 	};
 };
 
