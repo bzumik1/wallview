@@ -13,7 +13,8 @@ kiosk_loop() {
 	while true; do
 		url=$(cat /data/wallview/url 2>/dev/null || echo "$DEFAULT_URL")
 		extra=$(cat /data/wallview/cog-args 2>/dev/null)
-		cog --platform=drm --cookie-store=always $extra "$url" >> /tmp/cog.log 2>&1
+		export LANG=$(cat /data/wallview/language 2>/dev/null || echo en_US.UTF-8)
+		cog --platform=drm --cookie-store=always $extra "file:///usr/share/wallview/launcher.html#$url" >> /tmp/cog.log 2>&1
 		sleep 2
 	done
 }

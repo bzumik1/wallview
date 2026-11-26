@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=480, height=480, initial-scale=1">
+<title>WallView</title>
+<style>
+@font-face {
+	font-family: "Inter";
+	src: url("fonts/InterVariable.woff2") format("woff2");
+	font-weight: 100 900;
+}
+:root {
+	--surface: #0F172A;
+	--elevated: #1E293B;
+	--text: #F8FAFC;
+	--text-secondary: #94A3B8;
+	--accent: #22D3EE;
+	--error: #EF4444;
+}
+html, body {
+	margin: 0;
+	width: 480px;
+	height: 480px;
+	overflow: hidden;
+	background: var(--surface);
+	color: var(--text);
+	font-family: "Inter", sans-serif;
+	-webkit-user-select: none;
+	user-select: none;
+	cursor: none;
+}
+main {
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 18px;
+}
+#logo {
+	width: 140px;
+}
+#clock {
+	font-size: 96px;
+	font-weight: 300;
+	letter-spacing: -2px;
+	line-height: 1;
+	font-variant-numeric: tabular-nums;
+}
+#date {
+	font-size: 22px;
+	font-weight: 500;
+	color: var(--text-secondary);
+}
+#status {
+	position: absolute;
+	bottom: 28px;
+	left: 0;
+	right: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	font-size: 15px;
+	font-weight: 500;
+	color: var(--text-secondary);
+}
+#dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--accent);
+	animation: pulse 1.6s ease-in-out infinite;
+}
+#dot.error {
+	background: var(--error);
+}
+@keyframes pulse {
+	0%, 100% { opacity: 0.25; }
+	50% { opacity: 1; }
+}
+.hidden {
+	visibility: hidden;
+}
+</style>
+</head>
+<body>
+<main>
+	<img id="logo" src="logo.png" alt="WallView">
+	<div id="clock" class="hidden">--:--</div>
+	<div id="date" class="hidden"></div>
+</main>
+<div id="status"><span id="dot"></span><span id="message">Connecting to Home Assistant…</span></div>
+<script>
+const target = decodeURIComponent(location.hash.slice(1));
+const clock = document.getElementById("clock");
+const date = document.getElementById("date");
+const dot = document.getElementById("dot");
+const message = document.getElementById("message");
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+const dateFormat = new Intl.DateTimeFormat(undefined, { weekday: "long", day: "numeric", month: "long" });
+
+function updateClock() {
+	const now = new Date();
+	const synchronized = now.getFullYear() >= 2025;
+	clock.classList.toggle("hidden", !synchronized);
+	date.classList.toggle("hidden", !synchronized);
+	if (synchronized) {
+		clock.textContent = timeFormat.format(now);
+		date.textContent = dateFormat.format(now);
+	}
+}
+
+async function tryTarget() {
+	if (!target) {
+		dot.classList.add("error");
+		message.textContent = "No dashboard URL configured";
+		return;
+	}
+	try {
+		await fetch(target, { mode: "no-cors", cache: "no-store" });
+		location.replace(target);
+	} catch (error) {
+		setTimeout(tryTarget, 5000);
+	}
+}
+
+updateClock();
+setInterval(updateClock, 1000);
+tryTarget();
+</script>
+</body>
+</html>
