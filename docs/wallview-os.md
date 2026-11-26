@@ -75,3 +75,12 @@ IMAGE=~/WallView/out/wallview-primary.img ~/WallView/tools/install-panel.sh <pan
 ```
 
 then `reboot -f` on the panel, check, and `wallview-boot promote` (copies only the boot image to `golden`, which therefore stays a rescue system).
+
+With the root file system from CI (GitHub Actions, `.github/workflows/rootfs.yml`, artifact `wallview-rootfs`) instead of a local Buildroot build:
+
+```
+gh run download -R bzumik1/wallview <run-id> -n wallview-rootfs -D ~/WallView/out/ci
+limactl shell wallview -- env ROOTFS=/Users/jakub/WallView/out/ci/rootfs.erofs DEV_FILES=1 bash ~/WallView/tools/build-slot.sh
+```
+
+The CI image contains neither Wi-Fi credentials nor SSH keys. `DEV_FILES=1` unpacks it, adds `/etc/wpa_supplicant.conf` and `/root/.ssh/authorized_keys` from `local/` and packs it again (LZ4HC, same as Buildroot), so a development panel stays reachable. Without it the panel starts Improv and has no SSH access.
