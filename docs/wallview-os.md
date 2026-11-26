@@ -87,7 +87,7 @@ CI caches, so only the first build per configuration takes hours:
 
 | Cache | Key | Content |
 |---|---|---|
-| downloads + ccache | every run, restored from the newest | `br-dl`, `.buildroot-ccache` |
+| downloads + ccache | full builds only (output cache miss), restored from the newest | `br-dl`, `.buildroot-ccache` |
 | Buildroot output | Buildroot version + hash of `configs/`, `Config.in`, `external.mk`, `external.desc` | `host/`, `target/`, `staging`, `.config`, and from `build/` only the stamp and file-list files (sources and objects are deleted before saving) |
 | Rust | `Cargo.lock` + agent sources | cargo registry and `agent-target` |
 

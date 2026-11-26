@@ -55,15 +55,6 @@ jobs:
       - name: Fetch Buildroot
         run: git clone -q --depth 1 --branch "$BUILDROOT_VERSION" https://gitlab.com/buildroot.org/buildroot.git "$HOME/buildroot"
 
-      - name: Restore downloads and compiler cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            /home/runner/br-dl
-            /home/runner/.buildroot-ccache
-          key: buildroot-${{ env.BUILDROOT_VERSION }}-${{ github.run_id }}
-          restore-keys: buildroot-${{ env.BUILDROOT_VERSION }}-
-
       - name: Compute Buildroot output cache key
         id: key
         run: echo "output=br-output-v1-$BUILDROOT_VERSION-${{ hashFiles('buildroot/configs/**', 'buildroot/Config.in', 'buildroot/external.mk', 'buildroot/external.desc') }}" >> "$GITHUB_OUTPUT"
@@ -74,6 +65,16 @@ jobs:
         with:
           path: /home/runner/br
           key: ${{ steps.key.outputs.output }}
+
+      - name: Restore downloads and compiler cache
+        if: steps.output.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/br-dl
+            /home/runner/.buildroot-ccache
+          key: buildroot-${{ env.BUILDROOT_VERSION }}-${{ github.run_id }}
+          restore-keys: buildroot-${{ env.BUILDROOT_VERSION }}-
 
       - name: Mark restored packages as built
         if: steps.output.outputs.cache-hit == 'true'
@@ -94,7 +95,7 @@ jobs:
           df -h /
 
       - name: Save downloads and compiler cache
-        if: always()
+        if: always() && steps.output.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
