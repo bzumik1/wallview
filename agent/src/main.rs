@@ -1,6 +1,7 @@
 mod api;
 mod config;
 mod device;
+mod discovery;
 mod esphome;
 mod improv;
 mod mqtt;
@@ -44,5 +45,7 @@ fn main() {
     }
 
     start_improv_when_needed(device.clone());
+    let discovery_device = device.clone();
+    thread::spawn(move || discovery::run(discovery_device));
     esphome::serve(device, esphome::KeyStore::load(API_KEY));
 }

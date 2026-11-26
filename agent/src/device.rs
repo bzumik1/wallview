@@ -162,6 +162,10 @@ impl Device {
         read(URL_FILE).filter(|url| !url.is_empty()).unwrap_or_else(|| DEFAULT_URL.to_string())
     }
 
+    pub fn url_configured(&self) -> bool {
+        read(URL_FILE).is_some_and(|url| !url.is_empty())
+    }
+
     pub fn set_url(&self, url: &str) {
         if !(url.starts_with("http://") || url.starts_with("https://")) {
             return;

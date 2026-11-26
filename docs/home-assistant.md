@@ -10,6 +10,8 @@
 3. Home Assistant first connects without encryption (the panel accepts that only while it has no key), reads the device info and creates the device. It then sees `api_encryption_provisionable`, opens a second connection with the well-known all-zero Noise key, generates a key and sends it base64-encoded (`NoiseEncryptionSetKeyRequest`). The panel stores it in `/data/wallview/api.key`; from then on it accepts only that key, answers unencrypted clients with the ESPHome reject frame (`0x01`, "Bad indicator byte") and advertises `api_encryption`.
 4. With the WallView integration installed (see [Kiosk login](#kiosk-login)), Home Assistant also shows "WallView xxxx" as discovered; "Submit" signs in the kiosk.
 
+Dashboard URL: as long as `/data/wallview/url` does not exist, the agent looks for Home Assistant over mDNS (`_home-assistant._tcp`, 10 s, again every minute) and writes its `internal_url`, or `http://<IPv4>:<port>` when that is empty; the kiosk then restarts with it. The rootfs has no mDNS name resolution, so `homeassistant.local` (the fallback default) does not resolve on the panel. Tested with Home Assistant 2026.11.3 in the build VM.
+
 To hand the panel to another Home Assistant, delete `/data/wallview/api.key` and restart the agent.
 
 The panel identifies itself honestly: manufacturer "WallView", model "Sonoff NSPanel Pro", project "WallView.WallView OS" with the agent version, platform `HOST`. ESPHome firmware updates do not apply to it; WallView OS updates will be offered through an `update` entity of the same API (phase 6).
