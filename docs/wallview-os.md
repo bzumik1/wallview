@@ -18,13 +18,15 @@ All other partitions (Android `boot`, `system`, `vendor`, `userdata`, ITEAD `oem
 1. The vendor U-Boot reads BCB `boot-recovery` and boots `recovery` with the vendor DTB.
 2. Loader stage (`initramfs/init`, vendor DTB detected): increments the boot counter, picks `primary` or `golden`, extracts kernel, ramdisk and our DTB from the slot and `kexec`s into it with `wallview.slot=<slot>`.
 3. WallView stage of the initramfs (our DTB): starts the watchdog daemon. In the `primary` slot it looks for an EROFS super block at 64 MiB of `cache`; if found it mounts it read-only, moves `/dev`, `/proc`, `/sys` and `switch_root`s into the Buildroot system. Otherwise (and always in `golden`, or with `wallview.rescue=1`) it stays in the **rescue system**: Wi-Fi, SSH, logs.
-4. Buildroot system (busybox init, eudev): `S05wallview-data` mounts `/data`, `S20wallview-devices` sets audio and the light sensor, `S30wallview-time` starts NTP, `S40wallview-network` starts Wi-Fi, `S50dropbear` SSH, `S60wallview-agent` the Home Assistant agent, `S95wallview-health` resets the boot counter one minute after the network is up, `S99wallview-kiosk` runs Cog.
+4. Buildroot system (busybox init, eudev): `S05wallview-data` mounts `/data`, `S20wallview-devices` sets audio and the light sensor, `S30wallview-time` starts NTP, `S40wallview-network` starts Wi-Fi (`/data/wallview/wpa_supplicant.conf`, else a built-in `/etc/wpa_supplicant.conf`), `S40bluetoothd` BlueZ, `S50dropbear` SSH, `S60wallview-agent` the Home Assistant agent, `S95wallview-health` resets the boot counter one minute after the network is up, `S99wallview-kiosk` runs Cog.
 
 ## Kiosk
 
 Cog runs on DRM/KMS without a compositor and is restarted if it exits. It first opens `/usr/share/wallview/launcher.html` (start and offline screen in the design kit style: logo, clock and date once the time is synchronized, connection status). The page tries the dashboard URL every 5 seconds and switches to it as soon as it answers. Font: Inter (OFL, `usr/share/wallview/fonts/`). Time zone Europe/Prague, locales `en_US` and `cs_CZ`.
 
 The watchdog daemon started by the initramfs keeps running after `switch_root`.
+
+Firmware (Wi-Fi, Bluetooth) is not part of the root file system, so a rootfs built in CI contains no blobs. Before `switch_root` the initramfs mounts a tmpfs on `/lib/firmware` of the new root and copies its own firmware there; drivers that load firmware later (Bluetooth on first power-up, Wi-Fi after an SDIO reset) find it.
 
 ## Root file system
 
@@ -37,7 +39,8 @@ make -C ~/src/buildroot O=$HOME/build/br
 
 - Toolchain: Arm GNU Toolchain 14.2 (Bootlin toolchains only exist for x86-64 hosts; the build VM is arm64).
 - Graphics: Mesa with Panfrost (EGL, GLES, GBM; Panfrost needs LLVM at build time), WPE WebKit 2.50, Cog 0.18 with the DRM platform (no compositor).
-- Wi-Fi credentials and the SSH key come from `local/` through `board/wallview/post-build.sh`, the PSK only as a hash.
+- Wi-Fi credentials and the SSH key come from `local/` through `board/wallview/post-build.sh`, the PSK only as a hash. Without `local/` (CI) there is no built-in Wi-Fi, Wi-Fi is set up with Improv, and `/root/.ssh` is a link to `/data/wallview/ssh`.
+- `wallview-agent` is compiled natively by `post-build.sh` (`cargo build --locked` with a clean environment, so Buildroot's cross `pkg-config` is not used) on an arm64 Ubuntu 24.04 host; it needs glibc 2.39, the target has 2.40, and links `libdbus-1` from the target. The host needs Rust (`~/.cargo/bin/cargo`), `libdbus-1-dev` and `pkg-config`.
 - Output `images/rootfs.erofs` (LZ4HC).
 
 Known cost: with `BR2_PACKAGE_MESA3D_LLVM` Mesa also builds gallivm, so `libgallium` links `libLLVM.so` (82 MB) at run time although Panfrost itself only needs LLVM for its build-time shader compiler. To be optimised later (target Mesa without LLVM, host-only precompiler).
@@ -53,6 +56,9 @@ The large unified WebCore sources need 2–3 GB per compiler process. With an 8 
 | `/data/wallview/url` | dashboard URL (default `http://homeassistant.local:8123`) |
 | `/data/wallview/cog-args` | extra Cog arguments, e.g. `--ignore-tls-errors` when the URL is an IP address and the certificate is for a domain |
 | `/data/wallview/language` | locale for WebKit and the start screen, e.g. `cs_CZ.UTF-8` (default `en_US.UTF-8`) |
+| `/data/wallview/wpa_supplicant.conf` | Wi-Fi network written by Improv (SSID in hex, PSK as hash) |
+| `/data/wallview/api.key` | ESPHome API encryption key provisioned by Home Assistant |
+| `/data/wallview/ssh/authorized_keys` | SSH keys when the image has none built in (development only) |
 | `/data/wallview/mqtt.conf` | MQTT broker for `wallview-agent`, see [Home Assistant integration](home-assistant.md) |
 | `/data/xdg/` | WebKit data (local storage with the Home Assistant login, cookies, cache) |
 

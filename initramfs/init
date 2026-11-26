@@ -308,6 +308,9 @@ switch_to_rootfs() {
 	mount -t erofs -o ro "$loop" /newroot || { losetup -d "$loop"; return 1; }
 	[ -x /newroot/sbin/init ] || { umount /newroot; losetup -d "$loop"; return 1; }
 	save_log basic switch-root 1
+	if [ -d /lib/firmware ] && [ -d /newroot/lib/firmware ]; then
+		mount -t tmpfs -o size=4m,mode=0755 firmware /newroot/lib/firmware && cp -a /lib/firmware/. /newroot/lib/firmware/
+	fi
 	for mountpoint in /dev /proc /sys; do
 		mount --move "$mountpoint" "/newroot$mountpoint"
 	done

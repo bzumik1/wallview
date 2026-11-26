@@ -37,7 +37,10 @@ jobs:
       - name: Install host packages
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential file cpio unzip rsync bc wget python3 libncurses-dev wpasupplicant
+          sudo apt-get install -y -qq build-essential file cpio unzip rsync bc wget python3 libncurses-dev wpasupplicant libdbus-1-dev pkg-config
+
+      - name: Install Rust
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.100.0
 
       - name: Fetch Buildroot
         run: git clone -q --depth 1 --branch "$BUILDROOT_VERSION" https://gitlab.com/buildroot.org/buildroot.git "$HOME/buildroot"

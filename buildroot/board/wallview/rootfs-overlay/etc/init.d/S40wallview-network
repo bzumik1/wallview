@@ -1,5 +1,8 @@
 #!/bin/sh
 
+DATA_CONFIG=/data/wallview/wpa_supplicant.conf
+BUILTIN_CONFIG=/etc/wpa_supplicant.conf
+
 wait_for_wlan() {
 	for attempt in $(seq 1 30); do
 		[ -e /sys/class/net/wlan0 ] && return 0
@@ -15,20 +18,29 @@ reset_sdio() {
 }
 
 start() {
+	ip link set lo up
 	for round in 1 2 3; do
 		wait_for_wlan && break
 		reset_sdio
 	done
 	wait_for_wlan || { echo "network: wlan0 missing"; return 1; }
+	config=$DATA_CONFIG
+	[ -f "$config" ] || config=$BUILTIN_CONFIG
+	[ -f "$config" ] || { echo "network: no Wi-Fi configured"; return 0; }
 	mkdir -p /run/wpa_supplicant
-	ip link set lo up
 	ip link set wlan0 up
 	iw dev wlan0 set power_save off 2>/dev/null
-	wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant.conf
+	wpa_supplicant -B -i wlan0 -c "$config"
 	udhcpc -i wlan0 -b -x hostname:wallview -s /usr/share/udhcpc/default.script -p /run/udhcpc.wlan0.pid
+}
+
+stop() {
+	killall udhcpc wpa_supplicant 2>/dev/null
+	ip addr flush dev wlan0 2>/dev/null
 }
 
 case "$1" in
 start) start ;;
-stop) killall udhcpc wpa_supplicant 2>/dev/null ;;
+stop) stop ;;
+restart) stop; sleep 1; start ;;
 esac

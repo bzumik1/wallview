@@ -4,6 +4,7 @@
 
 ## Adding the panel
 
+0. Wi-Fi with [Improv](https://www.improv-wifi.com/) over Bluetooth LE: without a configured network the agent starts the Improv service right away (with a network that gives no address within 120 s, then too). Home Assistant (Improv BLE integration, also through ESPHome Bluetooth proxies) or the Improv web page shows "WallView xxxx"; entering the Wi-Fi password is the only step. The panel writes `/data/wallview/wpa_supplicant.conf` (SSID in hex, PSK as PBKDF2 hash), restarts the network and answers with its address. "Identify" blinks the backlight three times. The service stops 30 s after a successful connection.
 1. The panel announces itself over mDNS as `_esphomelib._tcp` (`wallview-xxxxxx`), advertising `api_encryption_supported` and `api_provisioning=zero-psk` while it has no encryption key.
 2. Home Assistant shows it as a discovered ESPHome device. "Add" is the only step.
 3. Home Assistant connects with the well-known all-zero Noise key, sees `api_encryption_provisionable`, generates a key and sends it (`NoiseEncryptionSetKeyRequest`). The panel stores it in `/data/wallview/api.key` and from then on only accepts that key and advertises `api_encryption`.
@@ -52,4 +53,4 @@ password=secret
 
 ## Kiosk login
 
-Improv (BLE/USB) only transfers Wi-Fi credentials. The dashboard login will be either a one-time login on the panel's own setup screen (touch keyboard, Home Assistant `login_flow` API, code handed to the frontend) or, with no action on the panel, a small WallView integration in Home Assistant that creates access for the kiosk and sends it over the ESPHome API.
+Improv only transfers Wi-Fi credentials. The dashboard login will be either a one-time login on the panel's own setup screen (touch keyboard, Home Assistant `login_flow` API, code handed to the frontend) or, with no action on the panel, a small WallView integration in Home Assistant that creates access for the kiosk and sends it over the ESPHome API.

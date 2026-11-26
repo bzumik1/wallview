@@ -86,6 +86,17 @@ impl Device {
             .unwrap_or_default()
     }
 
+    pub fn identify(&self) {
+        let on = self.backlight_on();
+        for _ in 0..3 {
+            self.set_backlight(false);
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            self.set_backlight(true);
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
+        self.set_backlight(on);
+    }
+
     pub fn restart_kiosk(&self) {
         let _ = Command::new("killall").arg("cog").status();
     }
