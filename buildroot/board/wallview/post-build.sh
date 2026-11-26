@@ -6,6 +6,12 @@ WALLVIEW=$(cd "$BR2_EXTERNAL_WALLVIEW_PATH/.." && pwd)
 LOCAL=$WALLVIEW/local
 
 mkdir -p "$TARGET/data" "$TARGET/lib/firmware"
+
+rm -rf "$TARGET/usr/share/clc"
+rm -f "$TARGET"/usr/lib/libclang*.so* "$TARGET"/usr/lib/libLLVMSPIRVLib.so* \
+	"$TARGET"/usr/lib/libLTO.so* "$TARGET"/usr/lib/libRemarks.so* \
+	"$TARGET"/usr/bin/amdgpu-arch "$TARGET"/usr/bin/nvptx-arch "$TARGET"/usr/bin/offload-arch \
+	"$TARGET"/usr/bin/diagtool "$TARGET"/usr/bin/llvm-spirv "$TARGET"/usr/bin/spirv-*
 install -D -m 0755 "$WALLVIEW/initramfs/wallview-boot" "$TARGET/usr/sbin/wallview-boot"
 
 if [ -f "$LOCAL/wifi/ssid" ] && [ -f "$LOCAL/wifi/psk" ]; then
