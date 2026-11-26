@@ -42,7 +42,7 @@ make -C ~/src/buildroot O=$HOME/build/br
 
 Known cost: with `BR2_PACKAGE_MESA3D_LLVM` Mesa also builds gallivm, so `libgallium` links `libLLVM.so` (82 MB) at run time although Panfrost itself only needs LLVM for its build-time shader compiler. To be optimised later (target Mesa without LLVM, host-only precompiler).
 
-The build VM has 8 GB RAM (the Mac has 16 GB). With `BR2_JLEVEL=4` the WebKit build was killed by the OOM killer on one of the large unified WebCore sources; `BR2_JLEVEL=2` and 16 GB of swap files in the VM (`fallocate`, `mkswap`, `swapon`) are needed. The whole first build takes several hours (LLVM, Mesa, WebKit).
+The large unified WebCore sources need 2–3 GB per compiler process. With an 8 GB VM and four jobs the OOM killer stopped the build; with two jobs it crawled because of swapping. What works on a 16 GB Mac: VM memory 12 GB (`limactl edit wallview --memory 12`), 16 GB of swap files in the VM (`fallocate`, `mkswap`, `swapon`, again after every VM restart) and four jobs (`make … BR2_JLEVEL=4`; the defconfig keeps the safe value 2). The whole first build takes several hours (LLVM, Mesa, WebKit).
 
 ## Data partition
 

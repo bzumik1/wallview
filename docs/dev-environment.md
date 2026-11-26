@@ -10,7 +10,7 @@
 ## Build VM (Lima)
 
 ```
-limactl create --name=wallview --vm-type=vz --cpus=6 --memory=8 --disk=60 \
+limactl create --name=wallview --vm-type=vz --cpus=6 --memory=12 --disk=60 \
   --mount-only ~/WallView:w --mount-type=virtiofs \
   --set '.images=[{"location":"https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-arm64.img","arch":"aarch64"}]' \
   template:ubuntu-24.04
