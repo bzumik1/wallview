@@ -1,0 +1,88 @@
+name: WallView OS root file system
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "buildroot/**"
+      - "agent/**"
+      - "initramfs/wallview-boot"
+      - ".github/workflows/rootfs.yml"
+
+concurrency:
+  group: rootfs
+  cancel-in-progress: false
+
+env:
+  BUILDROOT_VERSION: 2026.02.3
+  BR2_DL_DIR: /home/runner/br-dl
+
+jobs:
+  rootfs:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          df -h / /mnt 2>/dev/null || df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache /usr/local/share/boost /opt/microsoft /usr/share/swift
+          sudo docker system prune --all --force >/dev/null 2>&1 || true
+          df -h /
+          nproc
+          free -g
+
+      - name: Install host packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential file cpio unzip rsync bc wget python3 libncurses-dev wpasupplicant
+
+      - name: Fetch Buildroot
+        run: git clone -q --depth 1 --branch "$BUILDROOT_VERSION" https://gitlab.com/buildroot.org/buildroot.git "$HOME/buildroot"
+
+      - name: Restore downloads and compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/br-dl
+            /home/runner/.buildroot-ccache
+          key: buildroot-${{ env.BUILDROOT_VERSION }}-${{ github.run_id }}
+          restore-keys: buildroot-${{ env.BUILDROOT_VERSION }}-
+
+      - name: Build
+        run: |
+          make -s -C "$HOME/buildroot" O="$HOME/br" BR2_EXTERNAL="$GITHUB_WORKSPACE/buildroot" wallview_defconfig
+          timeout 315m make -C "$HOME/buildroot" O="$HOME/br" BR2_EXTERNAL="$GITHUB_WORKSPACE/buildroot" BR2_JLEVEL=4 > build.log 2>&1 || {
+            status=$?
+            tail -60 build.log
+            exit $status
+          }
+          tail -5 build.log
+          ls -l "$HOME/br/images"
+          df -h /
+
+      - name: Save downloads and compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /home/runner/br-dl
+            /home/runner/.buildroot-ccache
+          key: buildroot-${{ env.BUILDROOT_VERSION }}-${{ github.run_id }}
+
+      - name: Upload root file system
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallview-rootfs
+          path: /home/runner/br/images/rootfs.erofs
+          retention-days: 30
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7
