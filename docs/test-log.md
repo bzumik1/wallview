@@ -118,3 +118,13 @@ Tests:
 - `BT_HCIUART` stayed a module until `POWER_SEQUENCING` was built in (`depends on POWER_SEQUENCING || !POWER_SEQUENCING`).
 - linux-firmware has no `rtl8723ds_fw`/`rtl8723ds_config`; the files from the vendor partition (`/etc/firmware`) work: `hci0`, RTL8723D ROM v2, firmware `0xaa897e1b`. `Opcode 0x0c77 failed: -56` is a harmless unsupported optional command.
 - Serial aliases fix the numbering: `ttyS1` Bluetooth, `ttyS2` console, `ttyS4` UART4, `ttyS5` Zigbee (EZSP `RSTACK` confirmed again).
+
+## 2026-11-26 – panel 2: first WPE/Cog test (Debian packages)
+
+While the Buildroot WebKit build was still running (it needs about 3 GB per compiler process and crawls on a 16 GB Mac), a throwaway Debian trixie root file system (`debootstrap`, Cog 0.18.4, WPE WebKit 2.48.3, Mesa 25 with Panfrost, 596 MB after trimming) was copied into the panel's RAM and started with `chroot` from the rescue system. Nothing was written to the eMMC.
+
+- `udev` in a chroot needs `SYSTEMD_IGNORE_CHROOT=1` for `udevadm trigger`; the touch controller is then tagged `ID_INPUT_TOUCHSCREEN=1`.
+- Debian's WebKit sandbox (bubblewrap) fails in an initramfs root (`Failed to make / slave`); `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1` for the test. The Buildroot build has no sandbox.
+- The start page (`launcher.html`) loads in about 1.3 s and switches to Home Assistant once it answers.
+- Cog's default DRM renderer `modeset` crashed (SIGSEGV) while loading Home Assistant. With `--platform-params=renderer=gles` Home Assistant loads and shows its login page; Panfrost handles the GPU jobs. Cog with two web processes uses about 340 MB of RAM.
+- The kiosk script now uses the `gles` renderer.
