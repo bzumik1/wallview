@@ -37,6 +37,7 @@ cp /bin/busybox "$rootfs/bin/busybox"
 install -m 0755 "$WALLVIEW/initramfs/init" "$rootfs/init"
 install -m 0755 "$WALLVIEW/initramfs/wallview-boot" "$rootfs/bin/wallview-boot"
 install -D -m 0644 "$OUT/$DTS_NAME.dtb" "$rootfs/boot/wallview.dtb"
+cc -O2 -s -static -Wall -Wextra -Werror -o "$rootfs/bin/wallview-splash" "$WALLVIEW/initramfs/splash/wallview-splash.c" -lm
 
 copy_with_libs() {
 	install -D -m 0755 "$1" "$rootfs$1"

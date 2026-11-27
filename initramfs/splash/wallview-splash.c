@@ -1,0 +1,599 @@
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/kd.h>
+#include <math.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <time.h>
+#include <unistd.h>
+#include <drm/drm.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_mode.h>
+
+struct logo_gradient {
+	float x1, y1, x2, y2;
+	int count;
+	float offsets[4];
+	uint32_t colors[4];
+};
+
+#include "logo.h"
+
+#define LOGO_WIDTH 210.0f
+#define BOX_WIDTH 380
+#define BOX_HEIGHT 260
+#define SAMPLES 4
+#define MAX_CROSSINGS 64
+#define BREATH_PERIOD 3.2
+#define TINT_PERIOD 6.4
+#define BREATH_LOW 0.1
+#define BREATH_HIGH 0.9
+#define TINT_HIGH 0.7
+#define HALO_COLOR_R 10.0f
+#define HALO_COLOR_G 132.0f
+#define HALO_COLOR_B 255.0f
+#define HANDOFF_LIMIT_MS 60000
+#define HANDOFF_POLL_MS 100
+#define EVENT_TIMEOUT_MS 1000
+#define OPEN_ATTEMPTS 50
+#define OPEN_RETRY_MS 100
+
+enum { HALO, GLOW, LOGO, TINT, LAYERS };
+
+struct buffer {
+	uint32_t handle;
+	uint32_t fb;
+	uint32_t pitch;
+	uint64_t size;
+	uint8_t *map;
+};
+
+struct display {
+	int fd;
+	uint32_t connector;
+	uint32_t crtc;
+	struct drm_mode_modeinfo mode;
+	struct buffer buffers[2];
+	int front;
+	int step;
+	double fps;
+};
+
+static volatile sig_atomic_t handoff_requested;
+static volatile sig_atomic_t quit_requested;
+static uint8_t layers[LAYERS][BOX_WIDTH * BOX_HEIGHT * 4];
+
+static void on_handoff(int signal_number)
+{
+	(void)signal_number;
+	handoff_requested = 1;
+}
+
+static void on_quit(int signal_number)
+{
+	(void)signal_number;
+	quit_requested = 1;
+}
+
+static double boot_seconds(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_BOOTTIME, &now);
+	return now.tv_sec + now.tv_nsec / 1e9;
+}
+
+static void add_span(float *line, float from, float to, float weight)
+{
+	if (from < 0)
+		from = 0;
+	if (to > BOX_WIDTH)
+		to = BOX_WIDTH;
+	if (to <= from)
+		return;
+	int first = (int)from;
+	int last = (int)to;
+	if (first == last) {
+		line[first] += (to - from) * weight;
+		return;
+	}
+	line[first] += (first + 1 - from) * weight;
+	for (int x = first + 1; x < last; x++)
+		line[x] += weight;
+	if (last < BOX_WIDTH)
+		line[last] += (to - last) * weight;
+}
+
+static void band_coverage(int band, float scale, float left, float top, float *coverage)
+{
+	const float *points = logo_points + 2 * logo_offsets[band];
+	int count = logo_offsets[band + 1] - logo_offsets[band];
+	float crossings[MAX_CROSSINGS];
+
+	memset(coverage, 0, sizeof(float) * BOX_WIDTH * BOX_HEIGHT);
+	for (int row = 0; row < BOX_HEIGHT * SAMPLES; row++) {
+		float y = ((row + 0.5f) / SAMPLES - top) / scale;
+		int found = 0;
+		for (int i = 0; i < count && found < MAX_CROSSINGS; i++) {
+			float x0 = points[2 * i], y0 = points[2 * i + 1];
+			float x1 = points[2 * ((i + 1) % count)], y1 = points[2 * ((i + 1) % count) + 1];
+			if ((y0 <= y && y1 > y) || (y1 <= y && y0 > y))
+				crossings[found++] = (x0 + (y - y0) * (x1 - x0) / (y1 - y0) - LOGO_VIEW_X) * scale + left;
+		}
+		for (int i = 1; i < found; i++) {
+			float value = crossings[i];
+			int j = i - 1;
+			for (; j >= 0 && crossings[j] > value; j--)
+				crossings[j + 1] = crossings[j];
+			crossings[j + 1] = value;
+		}
+		for (int i = 0; i + 1 < found; i += 2)
+			add_span(coverage + (row / SAMPLES) * BOX_WIDTH, crossings[i], crossings[i + 1], 1.0f / SAMPLES);
+	}
+}
+
+static void gradient_color(const struct logo_gradient *gradient, float x, float y, float rgb[3])
+{
+	float dx = gradient->x2 - gradient->x1;
+	float dy = gradient->y2 - gradient->y1;
+	float t = ((x - gradient->x1) * dx + (y - gradient->y1) * dy) / (dx * dx + dy * dy);
+	int last = gradient->count - 1;
+	int segment = 0;
+
+	if (t <= gradient->offsets[0])
+		t = gradient->offsets[0];
+	if (t >= gradient->offsets[last])
+		t = gradient->offsets[last];
+	while (segment < last - 1 && t > gradient->offsets[segment + 1])
+		segment++;
+	float span = gradient->offsets[segment + 1] - gradient->offsets[segment];
+	float f = span > 0 ? (t - gradient->offsets[segment]) / span : 0;
+	for (int channel = 0; channel < 3; channel++) {
+		int shift = 16 - 8 * channel;
+		float a = (gradient->colors[segment] >> shift) & 0xff;
+		float b = (gradient->colors[segment + 1] >> shift) & 0xff;
+		rgb[channel] = a + (b - a) * f;
+	}
+}
+
+static void render_logo(int palette, float scale, float left, float top, float *rgba, float *coverage)
+{
+	memset(rgba, 0, sizeof(float) * BOX_WIDTH * BOX_HEIGHT * 4);
+	for (int band = 0; band < LOGO_BANDS; band++) {
+		band_coverage(band, scale, left, top, coverage);
+		for (int y = 0; y < BOX_HEIGHT; y++) {
+			for (int x = 0; x < BOX_WIDTH; x++) {
+				float alpha = coverage[y * BOX_WIDTH + x];
+				if (alpha <= 0)
+					continue;
+				if (alpha > 1)
+					alpha = 1;
+				float rgb[3];
+				gradient_color(&logo_gradients[palette][band], (x + 0.5f - left) / scale + LOGO_VIEW_X,
+					(y + 0.5f - top) / scale, rgb);
+				float *pixel = rgba + 4 * (y * BOX_WIDTH + x);
+				for (int channel = 0; channel < 3; channel++)
+					pixel[channel] = rgb[channel] * alpha + pixel[channel] * (1 - alpha);
+				pixel[3] = 255 * alpha + pixel[3] * (1 - alpha);
+			}
+		}
+	}
+}
+
+static void box_blur(float *rgba, float *scratch, int radius, int horizontal)
+{
+	int length = horizontal ? BOX_WIDTH : BOX_HEIGHT;
+	int lines = horizontal ? BOX_HEIGHT : BOX_WIDTH;
+	int stride = horizontal ? 4 : 4 * BOX_WIDTH;
+	float width = 2 * radius + 1;
+
+	for (int line = 0; line < lines; line++) {
+		float *base = rgba + (horizontal ? 4 * line * BOX_WIDTH : 4 * line);
+		for (int channel = 0; channel < 4; channel++) {
+			float sum = 0;
+			for (int i = 0; i < radius && i < length; i++)
+				sum += base[i * stride + channel];
+			for (int i = 0; i < length; i++) {
+				if (i + radius < length)
+					sum += base[(i + radius) * stride + channel];
+				if (i - radius - 1 >= 0)
+					sum -= base[(i - radius - 1) * stride + channel];
+				scratch[i] = sum / width;
+			}
+			for (int i = 0; i < length; i++)
+				base[i * stride + channel] = scratch[i];
+		}
+	}
+}
+
+static void store_layer(int layer, const float *rgba)
+{
+	for (int i = 0; i < BOX_WIDTH * BOX_HEIGHT * 4; i++) {
+		float value = rgba[i] + 0.5f;
+		layers[layer][i] = value < 0 ? 0 : value > 255 ? 255 : (uint8_t)value;
+	}
+}
+
+static int prepare_layers(void)
+{
+	float scale = LOGO_WIDTH / LOGO_VIEW_WIDTH;
+	float left = (BOX_WIDTH - LOGO_WIDTH) / 2;
+	float top = (BOX_HEIGHT - LOGO_VIEW_HEIGHT * scale) / 2;
+	float *rgba = malloc(sizeof(float) * BOX_WIDTH * BOX_HEIGHT * 4);
+	float *coverage = malloc(sizeof(float) * BOX_WIDTH * BOX_HEIGHT);
+	float scratch[BOX_WIDTH > BOX_HEIGHT ? BOX_WIDTH : BOX_HEIGHT];
+
+	if (!rgba || !coverage)
+		return -1;
+	render_logo(1, scale, left, top, rgba, coverage);
+	store_layer(TINT, rgba);
+	render_logo(0, scale, left, top, rgba, coverage);
+	store_layer(LOGO, rgba);
+	float sigma = LOGO_GLOW_BLUR * scale;
+	int radius = (int)lroundf((sqrtf(4 * sigma * sigma + 1) - 1) / 2);
+	for (int pass = 0; pass < 3; pass++) {
+		box_blur(rgba, scratch, radius, 1);
+		box_blur(rgba, scratch, radius, 0);
+	}
+	store_layer(GLOW, rgba);
+	float rx = BOX_WIDTH / 2.0f, ry = BOX_HEIGHT / 2.0f;
+	for (int y = 0; y < BOX_HEIGHT; y++) {
+		for (int x = 0; x < BOX_WIDTH; x++) {
+			float dx = (x + 0.5f - rx) / rx, dy = (y + 0.5f - ry) / ry;
+			float d = sqrtf(dx * dx + dy * dy);
+			float alpha = d < 0.5f ? 0.55f - (0.55f - 0.16f) * d / 0.5f : d < 1 ? 0.16f * (1 - d) / 0.5f : 0;
+			float *pixel = rgba + 4 * (y * BOX_WIDTH + x);
+			pixel[0] = HALO_COLOR_R * alpha;
+			pixel[1] = HALO_COLOR_G * alpha;
+			pixel[2] = HALO_COLOR_B * alpha;
+			pixel[3] = 255 * alpha;
+		}
+	}
+	store_layer(HALO, rgba);
+	free(rgba);
+	free(coverage);
+	return 0;
+}
+
+static double breath_at(double t)
+{
+	return BREATH_LOW + (BREATH_HIGH - BREATH_LOW) * (0.5 - 0.5 * cos(2 * M_PI * t / BREATH_PERIOD));
+}
+
+static double tint_at(double t)
+{
+	return TINT_HIGH * (0.5 - 0.5 * cos(2 * M_PI * t / TINT_PERIOD));
+}
+
+static inline uint32_t over(uint32_t source, uint32_t source_alpha, uint32_t destination)
+{
+	return source + (destination * (255 - source_alpha) + 127) / 255;
+}
+
+static void compose(uint8_t *map, uint32_t pitch, int left, int top, double t)
+{
+	uint32_t breath = (uint32_t)lround(breath_at(t) * 256);
+	uint32_t tint = (uint32_t)lround(tint_at(t) * 256);
+
+	for (int y = 0; y < BOX_HEIGHT; y++) {
+		uint32_t *row = (uint32_t *)(map + (size_t)(top + y) * pitch) + left;
+		for (int x = 0; x < BOX_WIDTH; x++) {
+			int i = 4 * (y * BOX_WIDTH + x);
+			const uint8_t *halo = layers[HALO] + i;
+			const uint8_t *glow = layers[GLOW] + i;
+			const uint8_t *logo = layers[LOGO] + i;
+			const uint8_t *alt = layers[TINT] + i;
+			uint32_t glow_alpha = glow[3] * breath >> 8;
+			uint32_t alt_alpha = alt[3] * tint >> 8;
+			uint32_t rgb[3];
+			for (int channel = 0; channel < 3; channel++) {
+				uint32_t value = halo[channel] * breath >> 8;
+				value = over(glow[channel] * breath >> 8, glow_alpha, value);
+				value = over(logo[channel], logo[3], value);
+				value = over(alt[channel] * tint >> 8, alt_alpha, value);
+				rgb[channel] = value > 255 ? 255 : value;
+			}
+			row[x] = rgb[0] << 16 | rgb[1] << 8 | rgb[2];
+		}
+	}
+}
+
+static int dump_frames(const char *directory, int count, int fps)
+{
+	uint32_t pitch = 480 * 4;
+	uint8_t *map = calloc(480, pitch);
+
+	if (!map)
+		return 1;
+	for (int n = 0; n < count; n++) {
+		char path[512];
+		compose(map, pitch, (480 - BOX_WIDTH) / 2, (480 - BOX_HEIGHT) / 2, (double)n / fps);
+		snprintf(path, sizeof(path), "%s/frame-%04d.ppm", directory, n);
+		FILE *file = fopen(path, "wb");
+		if (!file)
+			return 1;
+		fprintf(file, "P6\n480 480\n255\n");
+		for (int i = 0; i < 480 * 480; i++) {
+			uint32_t pixel = ((uint32_t *)map)[i];
+			uint8_t rgb[3] = { pixel >> 16 & 0xff, pixel >> 8 & 0xff, pixel & 0xff };
+			fwrite(rgb, 1, 3, file);
+		}
+		fclose(file);
+	}
+	free(map);
+	return 0;
+}
+
+static int get_resources(int fd, struct drm_mode_card_res *resources, uint32_t **connectors, uint32_t **crtcs)
+{
+	memset(resources, 0, sizeof(*resources));
+	if (ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, resources) || !resources->count_connectors || !resources->count_crtcs)
+		return -1;
+	*connectors = calloc(resources->count_connectors, sizeof(uint32_t));
+	*crtcs = calloc(resources->count_crtcs, sizeof(uint32_t));
+	if (!*connectors || !*crtcs)
+		return -1;
+	resources->count_fbs = 0;
+	resources->count_encoders = 0;
+	resources->connector_id_ptr = (uintptr_t)*connectors;
+	resources->crtc_id_ptr = (uintptr_t)*crtcs;
+	return ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, resources);
+}
+
+static int pick_connector(struct display *display, uint32_t connector_id, const uint32_t *crtcs, uint32_t crtc_count)
+{
+	struct drm_mode_get_connector connector = { .connector_id = connector_id };
+
+	if (ioctl(display->fd, DRM_IOCTL_MODE_GETCONNECTOR, &connector))
+		return -1;
+	if (connector.connection != 1 || !connector.count_modes || !connector.count_encoders)
+		return -1;
+	struct drm_mode_modeinfo *modes = calloc(connector.count_modes, sizeof(*modes));
+	uint32_t *encoders = calloc(connector.count_encoders, sizeof(uint32_t));
+	if (!modes || !encoders)
+		return -1;
+	uint32_t mode_count = connector.count_modes, encoder_count = connector.count_encoders;
+	connector.modes_ptr = (uintptr_t)modes;
+	connector.encoders_ptr = (uintptr_t)encoders;
+	connector.count_props = 0;
+	if (ioctl(display->fd, DRM_IOCTL_MODE_GETCONNECTOR, &connector) || connector.count_modes > mode_count ||
+		connector.count_encoders > encoder_count)
+		return -1;
+	display->mode = modes[0];
+	for (uint32_t i = 0; i < connector.count_modes; i++) {
+		if (modes[i].type & DRM_MODE_TYPE_PREFERRED) {
+			display->mode = modes[i];
+			break;
+		}
+	}
+	uint32_t encoder_id = connector.encoder_id ? connector.encoder_id : encoders[0];
+	struct drm_mode_get_encoder encoder = { .encoder_id = encoder_id };
+	if (ioctl(display->fd, DRM_IOCTL_MODE_GETENCODER, &encoder))
+		return -1;
+	display->crtc = encoder.crtc_id;
+	for (uint32_t i = 0; !display->crtc && i < crtc_count; i++) {
+		if (encoder.possible_crtcs & (1u << i))
+			display->crtc = crtcs[i];
+	}
+	display->connector = connector_id;
+	free(modes);
+	free(encoders);
+	return display->crtc ? 0 : -1;
+}
+
+static int open_display(struct display *display)
+{
+	for (int card = 0; card < 8; card++) {
+		char path[32];
+		snprintf(path, sizeof(path), "/dev/dri/card%d", card);
+		display->fd = open(path, O_RDWR | O_CLOEXEC);
+		if (display->fd < 0)
+			continue;
+		struct drm_mode_card_res resources;
+		uint32_t *connectors = NULL, *crtcs = NULL;
+		if (!get_resources(display->fd, &resources, &connectors, &crtcs)) {
+			for (uint32_t i = 0; i < resources.count_connectors; i++) {
+				if (!pick_connector(display, connectors[i], crtcs, resources.count_crtcs)) {
+					free(connectors);
+					free(crtcs);
+					return 0;
+				}
+			}
+		}
+		free(connectors);
+		free(crtcs);
+		close(display->fd);
+	}
+	return -1;
+}
+
+static int create_buffer(struct display *display, struct buffer *buffer)
+{
+	struct drm_mode_create_dumb create = {
+		.width = display->mode.hdisplay,
+		.height = display->mode.vdisplay,
+		.bpp = 32,
+	};
+
+	if (ioctl(display->fd, DRM_IOCTL_MODE_CREATE_DUMB, &create))
+		return -1;
+	buffer->handle = create.handle;
+	buffer->pitch = create.pitch;
+	buffer->size = create.size;
+	struct drm_mode_fb_cmd2 framebuffer = {
+		.width = display->mode.hdisplay,
+		.height = display->mode.vdisplay,
+		.pixel_format = DRM_FORMAT_XRGB8888,
+		.handles = { create.handle },
+		.pitches = { create.pitch },
+	};
+	if (ioctl(display->fd, DRM_IOCTL_MODE_ADDFB2, &framebuffer))
+		return -1;
+	buffer->fb = framebuffer.fb_id;
+	struct drm_mode_map_dumb map = { .handle = create.handle };
+	if (ioctl(display->fd, DRM_IOCTL_MODE_MAP_DUMB, &map))
+		return -1;
+	buffer->map = mmap(NULL, create.size, PROT_READ | PROT_WRITE, MAP_SHARED, display->fd, map.offset);
+	if (buffer->map == MAP_FAILED)
+		return -1;
+	memset(buffer->map, 0, create.size);
+	return 0;
+}
+
+static void enter_graphics_mode(void)
+{
+	int tty = open("/dev/tty0", O_RDWR | O_CLOEXEC);
+
+	if (tty < 0)
+		return;
+	ioctl(tty, KDSETMODE, KD_GRAPHICS);
+	close(tty);
+}
+
+static int request_vblank(struct display *display)
+{
+	union drm_wait_vblank wait = { 0 };
+
+	wait.request.type = _DRM_VBLANK_RELATIVE | _DRM_VBLANK_EVENT;
+	wait.request.sequence = display->step - 1;
+	return ioctl(display->fd, DRM_IOCTL_WAIT_VBLANK, &wait);
+}
+
+static int show_next(struct display *display, int left, int top, double vblank_seconds)
+{
+	int back = !display->front;
+	double t = round((boot_seconds() + vblank_seconds) * display->fps) / display->fps;
+	struct drm_mode_crtc_page_flip flip = {
+		.crtc_id = display->crtc,
+		.fb_id = display->buffers[back].fb,
+		.flags = DRM_MODE_PAGE_FLIP_EVENT,
+	};
+
+	compose(display->buffers[back].map, display->buffers[back].pitch, left, top, t);
+	return ioctl(display->fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip);
+}
+
+static uint32_t current_fb(struct display *display)
+{
+	struct drm_mode_crtc crtc = { .crtc_id = display->crtc };
+
+	if (ioctl(display->fd, DRM_IOCTL_MODE_GETCRTC, &crtc))
+		return 0;
+	return crtc.fb_id;
+}
+
+static void hand_off(struct display *display)
+{
+	uint32_t shown = display->buffers[display->front].fb;
+
+	ioctl(display->fd, DRM_IOCTL_DROP_MASTER, 0);
+	for (int waited = 0; waited < HANDOFF_LIMIT_MS && !quit_requested; waited += HANDOFF_POLL_MS) {
+		if (current_fb(display) != shown)
+			return;
+		usleep(HANDOFF_POLL_MS * 1000);
+	}
+}
+
+static int run(int fps)
+{
+	struct display display = { .fd = -1 };
+
+	for (int attempt = 0; open_display(&display); attempt++) {
+		if (attempt >= OPEN_ATTEMPTS || quit_requested || handoff_requested)
+			return 1;
+		usleep(OPEN_RETRY_MS * 1000);
+	}
+	int width = display.mode.hdisplay, height = display.mode.vdisplay;
+	if (width < BOX_WIDTH || height < BOX_HEIGHT)
+		return 1;
+	int left = (width - BOX_WIDTH) / 2, top = (height - BOX_HEIGHT) / 2;
+	int refresh = display.mode.vrefresh ? (int)display.mode.vrefresh : 60;
+	display.step = refresh / fps > 0 ? refresh / fps : 1;
+	display.fps = (double)refresh / display.step;
+	double vblank_seconds = 1.0 / refresh;
+	for (int i = 0; i < 2; i++) {
+		if (create_buffer(&display, &display.buffers[i]))
+			return 1;
+	}
+	compose(display.buffers[0].map, display.buffers[0].pitch, left, top, boot_seconds());
+	enter_graphics_mode();
+	struct drm_mode_crtc crtc = {
+		.crtc_id = display.crtc,
+		.fb_id = display.buffers[0].fb,
+		.set_connectors_ptr = (uintptr_t)&display.connector,
+		.count_connectors = 1,
+		.mode = display.mode,
+		.mode_valid = 1,
+	};
+	if (ioctl(display.fd, DRM_IOCTL_MODE_SETCRTC, &crtc))
+		return 1;
+	display.front = 0;
+	int waiting_for_vblank = 0;
+	if (display.step > 1 && !request_vblank(&display))
+		waiting_for_vblank = 1;
+	else if (show_next(&display, left, top, vblank_seconds))
+		return 1;
+	while (!quit_requested) {
+		struct pollfd poll_fd = { .fd = display.fd, .events = POLLIN };
+		int ready = poll(&poll_fd, 1, EVENT_TIMEOUT_MS);
+		if (ready < 0 && errno == EINTR)
+			continue;
+		if (ready <= 0)
+			continue;
+		char events[1024];
+		ssize_t length = read(display.fd, events, sizeof(events));
+		for (ssize_t offset = 0; offset + (ssize_t)sizeof(struct drm_event) <= length;) {
+			struct drm_event *event = (struct drm_event *)(events + offset);
+			if (event->type == DRM_EVENT_FLIP_COMPLETE) {
+				display.front = !display.front;
+				if (handoff_requested)
+					goto done;
+				if (display.step > 1 && !request_vblank(&display))
+					waiting_for_vblank = 1;
+				else if (show_next(&display, left, top, vblank_seconds))
+					goto done;
+			} else if (event->type == DRM_EVENT_VBLANK && waiting_for_vblank) {
+				waiting_for_vblank = 0;
+				if (handoff_requested)
+					goto done;
+				if (show_next(&display, left, top, vblank_seconds))
+					goto done;
+			}
+			offset += event->length;
+		}
+	}
+done:
+	if (handoff_requested && !quit_requested)
+		hand_off(&display);
+	return 0;
+}
+
+int main(int argc, char **argv)
+{
+	int fps = 30;
+	struct sigaction handoff = { .sa_handler = on_handoff };
+	struct sigaction quit = { .sa_handler = on_quit };
+
+	sigaction(SIGUSR1, &handoff, NULL);
+	sigaction(SIGTERM, &quit, NULL);
+	sigaction(SIGINT, &quit, NULL);
+	if (argc >= 3 && !strcmp(argv[1], "--fps")) {
+		fps = atoi(argv[2]);
+		argv += 2;
+		argc -= 2;
+	}
+	if (fps < 1 || fps > 60)
+		return 2;
+	if (prepare_layers())
+		return 1;
+	if (argc == 4 && !strcmp(argv[1], "--dump"))
+		return dump_frames(argv[2], atoi(argv[3]), fps);
+	return run(fps);
+}

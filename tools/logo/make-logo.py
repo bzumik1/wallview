@@ -57,6 +57,35 @@ def band(valley_x, direction):
     )
 
 
+def outline(valley_x, direction, corner_steps=6, arc_steps=24):
+    norm = math.sqrt(1 + SLOPE * SLOPE)
+    half = BAND_WIDTH * norm / 2
+    radius = BAND_WIDTH / 2
+    top_x = valley_x - SLOPE * VALLEY_Y
+    edge_x, edge_y = SLOPE * CORNER / norm, CORNER / norm
+
+    def quad(a, control, b):
+        return [
+            (
+                (1 - s) ** 2 * a[0] + 2 * (1 - s) * s * control[0] + s * s * b[0],
+                (1 - s) ** 2 * a[1] + 2 * (1 - s) * s * control[1] + s * s * b[1],
+            )
+            for s in (i / corner_steps for i in range(1, corner_steps + 1))
+        ]
+
+    points = [(top_x - half + CORNER, 0.0), (top_x + half - CORNER, 0.0)]
+    points += quad(points[-1], (top_x + half, 0.0), (top_x + half + edge_x, edge_y))
+    start = math.atan2(-SLOPE, 1)
+    for i in range(arc_steps + 1):
+        angle = start + math.pi * i / arc_steps
+        points.append((valley_x + radius * math.cos(angle), VALLEY_Y + radius * math.sin(angle)))
+    points.append((top_x - half + edge_x, edge_y))
+    points += quad(points[-1], (top_x - half, 0.0), (top_x - half + CORNER, 0.0))[:-1]
+    return [(valley_x + direction * (x - valley_x), y) for x, y in points]
+
+
+OUTLINES = (outline(VALLEYS[0], -1), outline(VALLEYS[1], -1), outline(VALLEYS[1], 1), outline(VALLEYS[0], 1))
+
 BANDS = (
     ("g2", band(VALLEYS[0], -1)),
     ("g4", band(VALLEYS[1], -1)),
@@ -99,12 +128,48 @@ def glow():
     )
 
 
+def header():
+    x, y, width, height = VIEW_BOX
+    lines = [
+        f"#define LOGO_VIEW_X {x}",
+        f"#define LOGO_VIEW_WIDTH {width}",
+        f"#define LOGO_VIEW_HEIGHT {height}",
+        f"#define LOGO_GLOW_BLUR {GLOW_BLUR}",
+        f"#define LOGO_BANDS {len(OUTLINES)}",
+        "",
+        "static const float logo_points[] = {",
+    ]
+    offsets = [0]
+    for points in OUTLINES:
+        lines.append("\t" + " ".join(f"{px:.3f}f, {py:.3f}f," for px, py in points))
+        offsets.append(offsets[-1] + len(points))
+    lines.append("};")
+    lines.append("")
+    lines.append("static const int logo_offsets[] = { " + ", ".join(str(o) for o in offsets) + " };")
+    lines.append("")
+    lines.append("static const struct logo_gradient logo_gradients[2][LOGO_BANDS] = {")
+    for palette in ("logo", "logo-alt"):
+        lines.append("\t{")
+        for gradient, _ in BANDS:
+            (x1, y1, x2, y2), stops = PALETTES[palette][gradient]
+            offsets_text = ", ".join(f"{float(offset)}f" for offset, _ in stops)
+            colors_text = ", ".join(f"0x{color[1:]}" for _, color in stops)
+            lines.append(
+                f"\t\t{{ {x1}, {y1}, {x2}, {y2}, {len(stops)}, {{ {offsets_text} }}, {{ {colors_text} }} }},"
+            )
+        lines.append("\t},")
+    lines.append("};")
+    return "\n".join(lines) + "\n"
+
+
 def main():
     target = pathlib.Path(sys.argv[1])
     target.mkdir(parents=True, exist_ok=True)
     (target / "logo.svg").write_text(logo("logo"))
     (target / "logo-alt.svg").write_text(logo("logo-alt"))
     (target / "logo-glow.svg").write_text(glow())
+    if len(sys.argv) > 2:
+        pathlib.Path(sys.argv[2]).write_text(header())
 
 
 if __name__ == "__main__":

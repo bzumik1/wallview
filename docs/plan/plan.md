@@ -377,7 +377,8 @@ The WallView OS logo (blue "W" made of overlapping bands) is approved.
 - [x] Logo as SVG (`tools/logo/make-logo.py`)
 - [ ] Simplified variant for small sizes, monochrome versions, banner for README and installer
 - [x] Breathing animation in the launcher, locked to 30 fps
-- [ ] Same animation from early boot (DRM animator in the initramfs) until the launcher takes over
+- [x] Same animation from early boot (`wallview-splash` in the initramfs) until the browser takes over
+- [ ] The launcher starts from the animator's last frame (centred logo on black, same breathing phase)
 - [ ] If it cannot be shown from U-Boot (missing ST7701 panel driver there), fallback: logo from the kernel or the first program
 
 ## Phase 5 – Camera and door intercom
