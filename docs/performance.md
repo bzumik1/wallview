@@ -165,7 +165,7 @@ Latency 24 smooths further (jerks about 380 in the offline prototype) at 8 ms mo
 
 ### Comparison with Android touch resampling (2026-11-28)
 
-Read from AOSP `frameworks/native` (main): `libs/input/InputConsumer.cpp`, `libs/input/Resampler.cpp`, `services/inputflinger/reader/mapper/MultiTouchInputMapper.cpp`. Android resamples in the app's `InputConsumer`, enabled unless `ro.input.resampling` is 0. The exact Android version of the panel's original system and any vendor property overrides are not checked yet.
+Read from AOSP `frameworks/native` (main): `libs/input/InputConsumer.cpp`, `libs/input/Resampler.cpp`, `services/inputflinger/reader/mapper/MultiTouchInputMapper.cpp`. Android resamples in the app's `InputConsumer` (current AOSP: enabled unless `ro.input.resampling` is 0). The panel's original system is Android 8.1.0, build OPM8.190605.003 (AOSP android-8.1.0_r65, vendor version NSPanel86P_1.6.5). Its `libinput.so` from the backup has the same constants (5 ms latency, 2 and 20 ms sample gap limits, 8 ms prediction cap), and `ro.input.noresample`, the switch of that release, is not set in the system or vendor properties, so resampling was on.
 
 | | Android | wallview-touch |
 |---|---|---|
