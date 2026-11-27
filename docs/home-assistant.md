@@ -20,7 +20,9 @@ The panel identifies itself honestly: manufacturer "WallView", model "Sonoff NSP
 
 | Entity | Type | Source / action |
 |---|---|---|
-| Display | light (brightness) | `/sys/class/backlight/backlight` |
+| Display | light (brightness) | `/sys/class/backlight/backlight`; setting a brightness turns Auto brightness off |
+| Auto brightness | switch | `/data/wallview/brightness`: off (default) or on, see [Display brightness](#display-brightness) |
+| Auto brightness minimum, maximum | numbers, %, config | the range Auto brightness stays in (default 5 % and 100 %) |
 | Presence | binary sensor (occupancy) | proximity sensor above a threshold (hand in front of the panel) |
 | Illuminance | sensor, lx | light sensor (`stk3310`, raw × scale) |
 | Proximity | sensor, diagnostic | raw proximity value |
@@ -39,6 +41,18 @@ The panel identifies itself honestly: manufacturer "WallView", model "Sonoff NSP
 | Bluetooth proxy | switch, config | `/data/wallview/bluetooth-proxy`: off (default) or on, see [Bluetooth proxy](#bluetooth-proxy) |
 
 Presence changes are sent immediately, sensors every 15 s, commands answer with the new state.
+
+## Display brightness
+
+Manual: the Display light's brightness is the backlight's PWM duty (`brightness` of `max_brightness`). Choosing a brightness in Home Assistant (or over MQTT) switches Auto brightness off, so the value stays where it was set. Turning the light on or off does not change the mode.
+
+Auto: with the Auto brightness switch on, the agent reads the light sensor every 0.5 s and sets the backlight from it:
+- the illuminance is mapped logarithmically from 1 lx (dark, the minimum) to 300 lx (bright, the maximum), and smoothed (exponential average, about 4 s);
+- the target moves only when it differs by more than 3 % of perceived brightness, so a passing shadow or a flickering lamp does not make the display pulse;
+- the backlight follows in small steps every 50 ms (the whole range in about 2.5 s), on a square-law curve, so the steps look even to the eye; it never goes below a duty of 1, so the display is never fully dark;
+- Home Assistant gets the Display brightness when a ramp ends, not every step.
+
+The minimum and maximum are percent of the PWM duty, as the Display light's brightness. The settings are stored in `/data/wallview/brightness` (`auto=on|off`, `minimum=`, `maximum=`) and survive a reboot. The lux readings of the `stk3310` are uncalibrated (raw × 0.1, see `test-log.md` 2026-11-25); 1 lx and 300 lx are constants in `agent/src/brightness.rs`.
 
 ## Zigbee and Thread
 
