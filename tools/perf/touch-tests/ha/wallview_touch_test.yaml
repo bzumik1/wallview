@@ -1,0 +1,127 @@
+input_boolean:
+  wvtt_light_1:
+    name: Test lustr
+  wvtt_light_2:
+    name: Test lampa
+  wvtt_plug:
+    name: Test zásuvka
+    icon: mdi:power-socket-eu
+  wvtt_fan:
+    name: Test ventilátor
+    icon: mdi:fan
+  wvtt_heater:
+    name: Test topení
+    icon: mdi:radiator
+
+input_number:
+  wvtt_brightness:
+    name: Test jas
+    min: 0
+    max: 255
+    step: 1
+  wvtt_cover:
+    name: Test roleta
+    min: 0
+    max: 100
+    step: 1
+  wvtt_temperature:
+    name: Test teplota
+    min: 15
+    max: 28
+    step: 0.1
+    unit_of_measurement: "°C"
+  wvtt_hue:
+    name: Test odstín
+    min: 0
+    max: 360
+    step: 1
+  wvtt_saturation:
+    name: Test sytost
+    min: 0
+    max: 100
+    step: 1
+
+template:
+  - sensor:
+      - name: Test teplota čidlo
+        unique_id: wvtt_temperature_sensor
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state: "{{ states('input_number.wvtt_temperature') }}"
+
+light:
+  - platform: template
+    lights:
+      wvtt_light:
+        friendly_name: Test světlo
+        unique_id: wvtt_light
+        value_template: "{{ is_state('input_boolean.wvtt_light_1', 'on') }}"
+        level_template: "{{ states('input_number.wvtt_brightness') | int }}"
+        hs_template: "({{ states('input_number.wvtt_hue') | float }}, {{ states('input_number.wvtt_saturation') | float }})"
+        turn_on:
+          action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.wvtt_light_1
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.wvtt_light_1
+        set_level:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.wvtt_brightness
+            data:
+              value: "{{ brightness }}"
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.wvtt_light_1
+        set_hs:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.wvtt_hue
+            data:
+              value: "{{ hs[0] }}"
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.wvtt_saturation
+            data:
+              value: "{{ hs[1] }}"
+
+cover:
+  - platform: template
+    covers:
+      wvtt_cover:
+        friendly_name: Test roleta
+        unique_id: wvtt_cover
+        device_class: shutter
+        position_template: "{{ states('input_number.wvtt_cover') | int }}"
+        open_cover:
+          action: input_number.set_value
+          target:
+            entity_id: input_number.wvtt_cover
+          data:
+            value: 100
+        close_cover:
+          action: input_number.set_value
+          target:
+            entity_id: input_number.wvtt_cover
+          data:
+            value: 0
+        set_cover_position:
+          action: input_number.set_value
+          target:
+            entity_id: input_number.wvtt_cover
+          data:
+            value: "{{ position }}"
+
+climate:
+  - platform: generic_thermostat
+    name: Test termostat
+    unique_id: wvtt_thermostat
+    heater: input_boolean.wvtt_heater
+    target_sensor: sensor.test_teplota_cidlo
+    min_temp: 7
+    max_temp: 35
+    target_temp: 21
+    precision: 0.5
+    target_temp_step: 0.5
