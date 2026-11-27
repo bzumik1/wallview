@@ -177,6 +177,16 @@ Settings is limited by input, not by frames (WebKit expert, IPC tap on the panel
 
 The remaining misses with `0009` are mostly late frames: GPU work that ends after the vblank (hand-over p99 14–16 ms, GPU p99 11–33 ms), led by tile painting on the Skia GPU workers sharing the GPU with the compositor.
 
+Measured with the CI image of run 46014060071 (patches `0001`–`0007`, `0009`, `0010`; the `0005` fix puts the vblank thread on `SCHED_RR` by itself, no `chrt`), same metric, 8 swipes per value:
+
+| Configuration | climate | settings | lights |
+|---|---|---|---|
+| all patches, 4 rounds | 6.5 / 6.5 / 12.7 / 3.2 (7.2 %) | 9.7 / 11.8 / 3.8 / 7.2 (8.1 %) | 2.6 / 3.9 / 1.3 / 3.3 (2.8 %) |
+| `WALLVIEW_WEBKIT_SYNC_TOUCH_SCROLL=1` (no `0009`), 2 rounds | 13.0 / 15.0 (14.0 %) | 42.2 / 19.0 (30.6 %) | 1.3 / 3.3 (2.3 %) |
+| `WALLVIEW_WEBKIT_NO_TOUCH_COALESCING=1` (no `0010`), 4 rounds | 9.2 / 3.2 / 4.5 / 1.9 (4.8 %) | 5.2 / 7.8 / 1.3 / 1.9 (4.0 %) | 2.0 / 1.3 / 3.2 / 3.9 (2.6 %) |
+
+`0009` fixes settings as predicted. `0010` does not help the frames and is worse on climate and settings; its effect on how fast the page reacts (the reason for it) was not measured.
+
 What stays on the main thread during a swipe and what it costs (climate, 100 % of one core): every touch move is sent to the page (`WebPageProxy::updateTouchEventTracking()` is `Synchronous` for everything outside Cocoa), i.e. touch and pointer event dispatch with `EventPath` and hit tests, every wheel event is dispatched to the DOM because of the passive `wheel` listener (`dispatchWheelEventViaMainThread()`), and every scroll position runs `RenderLayer::updateLayerPosition` / `recursiveUpdateLayerPositionsAfterScroll`. None of this blocks a frame once 1–4 are fixed, but it produces the tile repaints of cause 3 and keeps one core busy.
 
 ## Tried and dropped
