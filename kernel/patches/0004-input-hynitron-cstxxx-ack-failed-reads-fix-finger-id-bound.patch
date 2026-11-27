@@ -1,0 +1,27 @@
+diff --git a/drivers/input/touchscreen/hynitron_cstxxx.c b/drivers/input/touchscreen/hynitron_cstxxx.c
+index 2b1abe1..67fb96e 100644
+--- a/drivers/input/touchscreen/hynitron_cstxxx.c
++++ b/drivers/input/touchscreen/hynitron_cstxxx.c
+@@ -304,6 +304,13 @@ static void cst3xx_touch_report(struct i2c_client *client)
+ 	    buf[6] != CST3XX_TOUCH_DATA_CHK_VAL ||
+ 	    buf[0] == CST3XX_TOUCH_DATA_CHK_VAL) {
+ 		dev_err(&client->dev, "cst3xx touch read failure\n");
++		/*
++		 * Acknowledge anyway, as the vendor driver does after every
++		 * read: a controller left without the stop command may not
++		 * report again, and an edge triggered interrupt would then
++		 * never fire.
++		 */
++		cst3xx_finish_touch_read(client);
+ 		return;
+ 	}
+ 
+@@ -335,7 +342,7 @@ static void cst3xx_touch_report(struct i2c_client *client)
+ 		finger_id = (buf[idx] >> 4) & 0x0f;
+ 
+ 		/* Sanity check we don't have more fingers than we expect */
+-		if (ts_data->chip->max_touch_num < finger_id) {
++		if (finger_id >= ts_data->chip->max_touch_num) {
+ 			dev_err(&client->dev, "cst3xx touch read failure\n");
+ 			break;
+ 		}
