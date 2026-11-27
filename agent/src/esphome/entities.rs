@@ -3,12 +3,13 @@ use prost::Message;
 use crate::api::{
     BinarySensorStateResponse, ButtonCommandRequest, ColorMode, EntityCategory, ExecuteServiceRequest,
     LightCommandRequest, LightStateResponse, ListEntitiesBinarySensorResponse, ListEntitiesButtonResponse,
-    ListEntitiesLightResponse, ListEntitiesSelectResponse, ListEntitiesSensorResponse, ListEntitiesServicesArgument, ListEntitiesSwitchResponse,
-    ListEntitiesServicesResponse, ListEntitiesTextResponse, ListEntitiesTextSensorResponse, SensorStateClass,
+    ListEntitiesLightResponse, ListEntitiesNumberResponse, ListEntitiesSelectResponse, ListEntitiesSensorResponse, ListEntitiesServicesArgument, ListEntitiesSwitchResponse,
+    ListEntitiesServicesResponse, ListEntitiesTextResponse, ListEntitiesTextSensorResponse, NumberCommandRequest, NumberMode, NumberStateResponse, SensorStateClass,
     SelectCommandRequest, SelectStateResponse, SensorStateResponse, SwitchCommandRequest, SwitchStateResponse, ServiceArgType, TextCommandRequest, TextMode, TextSensorStateResponse,
     TextStateResponse,
 };
 use crate::device::Device;
+use crate::presence::{MAXIMUM_SENSITIVITY, MINIMUM_SENSITIVITY};
 use crate::radio::Mode;
 
 use super::message_type;
@@ -31,6 +32,7 @@ pub const PAIR: u32 = 15;
 pub const RADIO_MODE: u32 = 16;
 pub const ZIGBEE_CLIENT: u32 = 17;
 pub const BLUETOOTH_PROXY: u32 = 18;
+pub const PRESENCE_SENSITIVITY: u32 = 22;
 
 pub type Encoded = (u16, Vec<u8>);
 
@@ -119,6 +121,22 @@ pub fn list() -> Vec<Encoded> {
             key: BLUETOOTH_PROXY,
             name: "Bluetooth proxy".into(),
             icon: "mdi:bluetooth".into(),
+            entity_category: EntityCategory::Config as i32,
+            ..Default::default()
+        },
+    ));
+    messages.push(encode(
+        message_type::LIST_ENTITIES_NUMBER,
+        ListEntitiesNumberResponse {
+            object_id: "presence_sensitivity".into(),
+            key: PRESENCE_SENSITIVITY,
+            name: "Presence sensitivity".into(),
+            icon: "mdi:motion-sensor".into(),
+            min_value: MINIMUM_SENSITIVITY as f32,
+            max_value: MAXIMUM_SENSITIVITY as f32,
+            step: 1.0,
+            unit_of_measurement: "%".into(),
+            mode: NumberMode::Slider as i32,
             entity_category: EntityCategory::Config as i32,
             ..Default::default()
         },
@@ -215,7 +233,7 @@ pub fn display_state(device: &Device) -> Encoded {
 }
 
 pub fn presence_state(device: &Device) -> Option<(bool, Encoded)> {
-    let near = device.proximity_near()?;
+    let near = device.presence.near()?;
     Some((
         near,
         encode(
@@ -223,6 +241,13 @@ pub fn presence_state(device: &Device) -> Option<(bool, Encoded)> {
             BinarySensorStateResponse { key: PRESENCE, state: near, missing_state: false, ..Default::default() },
         ),
     ))
+}
+
+pub fn presence_sensitivity_state(device: &Device) -> Encoded {
+    encode(
+        message_type::NUMBER_STATE,
+        NumberStateResponse { key: PRESENCE_SENSITIVITY, state: device.presence.sensitivity() as f32, missing_state: false, ..Default::default() },
+    )
 }
 
 pub fn url_state(device: &Device) -> Encoded {
@@ -300,7 +325,7 @@ pub fn bluetooth_proxy_state(device: &Device) -> Encoded {
 }
 
 pub fn all_states(device: &Device) -> Vec<Encoded> {
-    let mut states = vec![display_state(device), url_state(device), bluetooth_proxy_state(device)];
+    let mut states = vec![display_state(device), url_state(device), bluetooth_proxy_state(device), presence_sensitivity_state(device)];
     states.extend(radio_states(device));
     if let Some((_, presence)) = presence_state(device) {
         states.push(presence);
@@ -355,6 +380,16 @@ pub fn handle_switch(device: &Device, data: &[u8]) {
     if command.key == BLUETOOTH_PROXY {
         device.bluetooth.set_proxy(command.state);
     }
+}
+
+pub fn handle_number(device: &Device, data: &[u8]) -> Option<Encoded> {
+    let command = NumberCommandRequest::decode(data).ok()?;
+    if command.key != PRESENCE_SENSITIVITY || !command.state.is_finite() {
+        return None;
+    }
+    let value = command.state.round().clamp(MINIMUM_SENSITIVITY as f32, MAXIMUM_SENSITIVITY as f32) as u32;
+    device.presence.set_sensitivity(value);
+    Some(presence_sensitivity_state(device))
 }
 
 pub fn handle_service(device: &Device, data: &[u8]) {

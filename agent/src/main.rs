@@ -8,6 +8,7 @@ mod improv;
 mod mdns;
 mod mqtt;
 mod mqtt_discovery;
+mod presence;
 mod radio;
 mod wifi;
 
@@ -49,6 +50,8 @@ fn main() {
 
     let bluetooth = device.bluetooth.clone();
     thread::spawn(move || bluetooth::run(bluetooth));
+    let presence_device = device.clone();
+    thread::spawn(move || presence::run(presence_device));
     start_improv_when_needed(device.clone());
     let discovery_device = device.clone();
     thread::spawn(move || discovery::run(discovery_device));

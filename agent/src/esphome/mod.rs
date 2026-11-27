@@ -61,6 +61,9 @@ pub mod message_type {
     pub const SWITCH_COMMAND_REQUEST: u16 = 33;
     pub const SUBSCRIBE_HOMEASSISTANT_SERVICES_REQUEST: u16 = 34;
     pub const HOMEASSISTANT_ACTION_REQUEST: u16 = 35;
+    pub const LIST_ENTITIES_NUMBER: u16 = 49;
+    pub const NUMBER_STATE: u16 = 50;
+    pub const NUMBER_COMMAND_REQUEST: u16 = 51;
     pub const LIST_ENTITIES_SELECT: u16 = 52;
     pub const SELECT_STATE: u16 = 53;
     pub const SELECT_COMMAND_REQUEST: u16 = 54;
@@ -351,6 +354,11 @@ fn handle_message(
             }
         }
         SELECT_COMMAND_REQUEST => entities::handle_select(device, data),
+        NUMBER_COMMAND_REQUEST => {
+            if let Some((state_type, state)) = entities::handle_number(device, data) {
+                sender.send(state_type, &state)?;
+            }
+        }
         SWITCH_COMMAND_REQUEST => entities::handle_switch(device, data),
         SUBSCRIBE_BLUETOOTH_LE_ADVERTISEMENTS_REQUEST => {
             if device.bluetooth.proxy_enabled() && subscriptions.advertisements.is_none() {

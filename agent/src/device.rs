@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::bluetooth::Bluetooth;
+use crate::presence::Presence;
 use crate::radio::Radio;
 
 const BACKLIGHT: &str = "/sys/class/backlight/backlight";
@@ -15,7 +16,6 @@ const PAIRING_SECRET_LENGTH: std::ops::RangeInclusive<usize> = 16..=128;
 const DEFAULT_URL: &str = "http://homeassistant.local:8123";
 const BL_POWER_ON: &str = "0";
 const BL_POWER_OFF: &str = "4";
-const PROXIMITY_NEAR: f64 = 100.0;
 
 #[derive(Clone)]
 pub struct Device {
@@ -26,6 +26,7 @@ pub struct Device {
     sign_in_requests: Arc<AtomicU64>,
     pub radio: Radio,
     pub bluetooth: Bluetooth,
+    pub presence: Presence,
 }
 
 fn read(path: impl AsRef<Path>) -> Option<String> {
@@ -57,15 +58,12 @@ impl Device {
             sign_in_requests: Arc::new(AtomicU64::new(0)),
             radio: Radio::load(),
             bluetooth: Bluetooth::load(),
+            presence: Presence::load(),
         }
     }
 
     pub fn node_name(&self) -> String {
         format!("wallview-{}", &self.id[self.id.len().saturating_sub(6)..])
-    }
-
-    pub fn proximity_near(&self) -> Option<bool> {
-        Some(self.proximity()? >= PROXIMITY_NEAR)
     }
 
     pub fn free_memory_mb(&self) -> Option<f64> {
