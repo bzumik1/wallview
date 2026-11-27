@@ -39,7 +39,7 @@ struct logo_gradient {
 #define HALO_COLOR_R 10.0f
 #define HALO_COLOR_G 132.0f
 #define HALO_COLOR_B 255.0f
-#define HANDOFF_LIMIT_MS 60000
+#define DEADLINE_SECONDS 120
 #define HANDOFF_POLL_MS 100
 #define EVENT_TIMEOUT_MS 1000
 #define OPEN_ATTEMPTS 50
@@ -63,6 +63,7 @@ struct display {
 	struct buffer buffers[2];
 	int front;
 	int step;
+	int refresh;
 	double fps;
 };
 
@@ -392,8 +393,12 @@ static int open_display(struct display *display)
 {
 	for (int card = 0; card < 8; card++) {
 		char path[32];
-		snprintf(path, sizeof(path), "/dev/dri/card%d", card);
+		snprintf(path, sizeof(path), "dri/card%d", card);
 		display->fd = open(path, O_RDWR | O_CLOEXEC);
+		if (display->fd < 0) {
+			snprintf(path, sizeof(path), "/dev/dri/card%d", card);
+			display->fd = open(path, O_RDWR | O_CLOEXEC);
+		}
 		if (display->fd < 0)
 			continue;
 		struct drm_mode_card_res resources;
@@ -447,37 +452,49 @@ static int create_buffer(struct display *display, struct buffer *buffer)
 	return 0;
 }
 
-static void enter_graphics_mode(void)
+static void set_console_mode(int mode)
 {
-	int tty = open("/dev/tty0", O_RDWR | O_CLOEXEC);
+	int tty = open("tty0", O_RDWR | O_CLOEXEC);
 
 	if (tty < 0)
+		tty = open("/dev/tty0", O_RDWR | O_CLOEXEC);
+	if (tty < 0)
 		return;
-	ioctl(tty, KDSETMODE, KD_GRAPHICS);
+	ioctl(tty, KDSETMODE, mode);
 	close(tty);
 }
 
-static int request_vblank(struct display *display)
+static int request_vblank(struct display *display, unsigned int count)
 {
 	union drm_wait_vblank wait = { 0 };
 
 	wait.request.type = _DRM_VBLANK_RELATIVE | _DRM_VBLANK_EVENT;
-	wait.request.sequence = display->step - 1;
+	wait.request.sequence = count;
 	return ioctl(display->fd, DRM_IOCTL_WAIT_VBLANK, &wait);
 }
 
-static int show_next(struct display *display, int left, int top, double vblank_seconds)
+static void prepare_back(struct display *display, int left, int top)
 {
 	int back = !display->front;
-	double t = round((boot_seconds() + vblank_seconds) * display->fps) / display->fps;
+	double ahead = (double)display->step / display->refresh;
+	double t = round((boot_seconds() + ahead) * display->fps) / display->fps;
+
+	compose(display->buffers[back].map, display->buffers[back].pitch, left, top, t);
+}
+
+enum flip_result { FLIPPED, RETRY, FAILED };
+
+static enum flip_result flip_back(struct display *display)
+{
 	struct drm_mode_crtc_page_flip flip = {
 		.crtc_id = display->crtc,
-		.fb_id = display->buffers[back].fb,
+		.fb_id = display->buffers[!display->front].fb,
 		.flags = DRM_MODE_PAGE_FLIP_EVENT,
 	};
 
-	compose(display->buffers[back].map, display->buffers[back].pitch, left, top, t);
-	return ioctl(display->fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip);
+	if (!ioctl(display->fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip))
+		return FLIPPED;
+	return errno == EBUSY ? RETRY : FAILED;
 }
 
 static uint32_t current_fb(struct display *display)
@@ -493,11 +510,35 @@ static void hand_off(struct display *display)
 {
 	uint32_t shown = display->buffers[display->front].fb;
 
-	ioctl(display->fd, DRM_IOCTL_DROP_MASTER, 0);
-	for (int waited = 0; waited < HANDOFF_LIMIT_MS && !quit_requested; waited += HANDOFF_POLL_MS) {
-		if (current_fb(display) != shown)
-			return;
+	if (ioctl(display->fd, DRM_IOCTL_DROP_MASTER, 0))
+		fprintf(stderr, "wallview-splash: dropping DRM master failed: %s\n", strerror(errno));
+	while (!quit_requested && current_fb(display) == shown)
 		usleep(HANDOFF_POLL_MS * 1000);
+}
+
+struct schedule {
+	int flip_pending;
+	int waiting_for_vblank;
+};
+
+static int advance(struct display *display, struct schedule *schedule, int wait_first)
+{
+	if (wait_first && !request_vblank(display, wait_first)) {
+		schedule->waiting_for_vblank = 1;
+		return 0;
+	}
+	switch (flip_back(display)) {
+	case FLIPPED:
+		schedule->flip_pending = 1;
+		return 0;
+	case RETRY:
+		if (!request_vblank(display, 1)) {
+			schedule->waiting_for_vblank = 1;
+			return 0;
+		}
+		return -1;
+	default:
+		return -1;
 	}
 }
 
@@ -514,16 +555,19 @@ static int run(int fps)
 	if (width < BOX_WIDTH || height < BOX_HEIGHT)
 		return 1;
 	int left = (width - BOX_WIDTH) / 2, top = (height - BOX_HEIGHT) / 2;
-	int refresh = display.mode.vrefresh ? (int)display.mode.vrefresh : 60;
-	display.step = refresh / fps > 0 ? refresh / fps : 1;
-	display.fps = (double)refresh / display.step;
-	double vblank_seconds = 1.0 / refresh;
+	display.refresh = display.mode.vrefresh ? (int)display.mode.vrefresh : 60;
+	display.step = (int)lround((double)display.refresh / fps);
+	if (display.step < 1)
+		display.step = 1;
+	display.fps = (double)display.refresh / display.step;
 	for (int i = 0; i < 2; i++) {
 		if (create_buffer(&display, &display.buffers[i]))
 			return 1;
 	}
+	if (prepare_layers())
+		return 1;
+	double deadline = boot_seconds() + DEADLINE_SECONDS;
 	compose(display.buffers[0].map, display.buffers[0].pitch, left, top, boot_seconds());
-	enter_graphics_mode();
 	struct drm_mode_crtc crtc = {
 		.crtc_id = display.crtc,
 		.fb_id = display.buffers[0].fb,
@@ -534,43 +578,61 @@ static int run(int fps)
 	};
 	if (ioctl(display.fd, DRM_IOCTL_MODE_SETCRTC, &crtc))
 		return 1;
+	set_console_mode(KD_GRAPHICS);
 	display.front = 0;
-	int waiting_for_vblank = 0;
-	if (display.step > 1 && !request_vblank(&display))
-		waiting_for_vblank = 1;
-	else if (show_next(&display, left, top, vblank_seconds))
-		return 1;
+	struct schedule schedule = { 0 };
+	prepare_back(&display, left, top);
+	if (advance(&display, &schedule, display.step - 1))
+		goto done;
 	while (!quit_requested) {
+		if (boot_seconds() > deadline)
+			handoff_requested = 1;
+		if (handoff_requested && !schedule.flip_pending)
+			break;
 		struct pollfd poll_fd = { .fd = display.fd, .events = POLLIN };
 		int ready = poll(&poll_fd, 1, EVENT_TIMEOUT_MS);
-		if (ready < 0 && errno == EINTR)
+		if (ready < 0) {
+			if (errno == EINTR)
+				continue;
+			break;
+		}
+		if (ready == 0) {
+			schedule.flip_pending = 0;
+			schedule.waiting_for_vblank = 0;
+			if (handoff_requested)
+				break;
+			if (advance(&display, &schedule, 0))
+				break;
 			continue;
-		if (ready <= 0)
-			continue;
-		char events[1024];
+		}
+		if (poll_fd.revents & (POLLERR | POLLHUP | POLLNVAL))
+			break;
+		char events[1024] __attribute__((aligned(8)));
 		ssize_t length = read(display.fd, events, sizeof(events));
 		for (ssize_t offset = 0; offset + (ssize_t)sizeof(struct drm_event) <= length;) {
 			struct drm_event *event = (struct drm_event *)(events + offset);
-			if (event->type == DRM_EVENT_FLIP_COMPLETE) {
+			if (event->length < sizeof(struct drm_event))
+				break;
+			offset += event->length;
+			if (event->type == DRM_EVENT_FLIP_COMPLETE && schedule.flip_pending) {
+				schedule.flip_pending = 0;
 				display.front = !display.front;
 				if (handoff_requested)
+					continue;
+				prepare_back(&display, left, top);
+				if (advance(&display, &schedule, display.step - 1))
 					goto done;
-				if (display.step > 1 && !request_vblank(&display))
-					waiting_for_vblank = 1;
-				else if (show_next(&display, left, top, vblank_seconds))
-					goto done;
-			} else if (event->type == DRM_EVENT_VBLANK && waiting_for_vblank) {
-				waiting_for_vblank = 0;
+			} else if (event->type == DRM_EVENT_VBLANK && schedule.waiting_for_vblank) {
+				schedule.waiting_for_vblank = 0;
 				if (handoff_requested)
-					goto done;
-				if (show_next(&display, left, top, vblank_seconds))
+					continue;
+				if (advance(&display, &schedule, 0))
 					goto done;
 			}
-			offset += event->length;
 		}
 	}
 done:
-	if (handoff_requested && !quit_requested)
+	if (!quit_requested)
 		hand_off(&display);
 	return 0;
 }
@@ -591,9 +653,7 @@ int main(int argc, char **argv)
 	}
 	if (fps < 1 || fps > 60)
 		return 2;
-	if (prepare_layers())
-		return 1;
 	if (argc == 4 && !strcmp(argv[1], "--dump"))
-		return dump_frames(argv[2], atoi(argv[3]), fps);
+		return prepare_layers() ? 1 : dump_frames(argv[2], atoi(argv[3]), fps);
 	return run(fps);
 }

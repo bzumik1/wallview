@@ -298,7 +298,7 @@ EROFS_MAGIC=e0f5e1e2
 
 start_splash() {
 	grep -qw "wallview.splash=0" /proc/cmdline && return
-	[ -x /bin/wallview-splash ] && /bin/wallview-splash &
+	[ -x /bin/wallview-splash ] && (cd /dev && exec /bin/wallview-splash) &
 }
 
 switch_to_rootfs() {
