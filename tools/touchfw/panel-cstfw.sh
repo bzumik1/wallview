@@ -30,13 +30,13 @@ esac
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 OWNER="${WALLVIEW_AGENT:-panel-cstfw $(hostname -s 2>/dev/null || echo mac)} · touch controller"
-OWNER=$(printf '%s' "$OWNER" | tr -d "'")
+OWNER=$(printf '%s' "$OWNER · $$ · $(date +%s)" | tr -d "'")
 
 MARK=/data/wallview/cstfw-failed
 LOCK=/tmp/wallview-panel.lock
 R=/tmp/cstfw.run
 RUNNER_OWNER="touch controller flash (cstfw-run)"
-LIVE='live() { [ -s '$R'/rc ] && return 1; pidof cstfw > /dev/null && return 0; if [ -s '$R'/pid ]; then kill -0 "$(cat '$R'/pid)" 2>/dev/null; return; fi; [ -s '$R'/started ] || return 0; [ $(($(date +%s) - $(cat '$R'/started))) -lt 120 ]; }'
+LIVE='live() { [ -s '$R'/rc ] && return 1; pidof cstfw > /dev/null && return 0; if [ -s '$R'/pid ]; then kill -0 "$(cat '$R'/pid)" 2>/dev/null; return; fi; [ -s '$R'/started ] || return 1; [ $(($(cut -d. -f1 /proc/uptime) - $(cat '$R'/started))) -lt 120 ]; }'
 
 state() {
 	$SSH "$PANEL" "if [ -e $MARK ]; then echo \"failed-flash marker: \$(cat $MARK)\"; else echo 'failed-flash marker: none'; fi
@@ -44,9 +44,12 @@ state() {
 		if [ -e /sys/bus/i2c/drivers/Hynitron-TS/1-005a ]; then echo 'touch driver: bound'; else echo 'touch driver: not bound'; fi
 		if [ -s /tmp/cstfw.agent-pids ]; then echo \"agent paused: \$(cat /tmp/cstfw.agent-pids)\"; else echo 'agent paused: no'; fi
 		if [ -d $R ]; then echo \"flash run: rc \$(cat $R/rc 2>/dev/null || echo none)\"; else echo 'flash run: none'; fi
-		[ ! -e $MARK ]" && st=0 || st=$?
+		if [ -e $MARK ]; then exit 1; fi
+		[ \"\$(cat $LOCK/owner 2>/dev/null)\" = '$RUNNER_OWNER' ] && exit 4
+		exit 0" && st=0 || st=$?
 	case "$st" in
 	1) echo "next: $0 $PANEL recover <vendor image> --erase-and-program" >&2 ;;
+	4) echo "lock held by a flash run without a failed-flash marker: if no run is live, see docs/touch-controller.md, way back by hand, step 3" >&2 ;;
 	255) echo "could not read the panel state (ssh failed)" >&2 ;;
 	esac
 	return "$st"
@@ -57,6 +60,7 @@ follow() {
 		$LIVE
 		[ -d \$R ] || { echo 'no flash run on the panel' >&2; exit 96; }
 		while [ ! -s \$R/rc ]; do
+			[ -d \$R ] || { echo 'the run directory went away' >&2; exit 98; }
 			n=\$((n + 1))
 			if [ \$n -gt 300 ]; then echo 'no result after 300 s' >&2; exit 97; fi
 			if [ \$n -gt 5 ] && ! live && [ ! -s \$R/rc ]; then
@@ -64,7 +68,10 @@ follow() {
 			fi
 			sleep 1
 		done
-		cat \$R/log; exit \"\$(cat \$R/rc)\"" && rc=0 || rc=$?
+		rc=\$(cat \$R/rc 2>/dev/null)
+		cat \$R/log
+		case \"\$rc\" in '' | *[!0-9]*) echo 'the run directory went away or has no valid result' >&2; exit 98 ;; esac
+		exit \"\$rc\"" && rc=0 || rc=$?
 	case "$rc" in
 	0) echo "flash done and verified" ;;
 	2 | 3 | 5) echo "flash refused or boot mode not reached, nothing written in this run (rc $rc)" >&2 ;;
@@ -87,11 +94,15 @@ if [ "$CMD" = state ]; then
 fi
 
 locked=0
+took_over=0
 OUT=
 cleanup() {
 	[ -n "$OUT" ] && rm -f "$OUT"
 	if [ "$locked" = 1 ]; then
 		"$REPO/tools/panel-lock.sh" "$PANEL" release "$OWNER" 2>/dev/null || true
+	fi
+	if [ "$took_over" = 1 ]; then
+		$SSH "$PANEL" "[ \"\$(cat $LOCK/owner 2>/dev/null)\" = '$OWNER' ] && printf '%s\n' '$RUNNER_OWNER' > $LOCK/owner; rmdir $LOCK/takeover 2>/dev/null; true" || true
 	fi
 }
 trap cleanup EXIT
@@ -102,16 +113,35 @@ OUT=$(mktemp "$REPO/out/cstfw/cstfw.XXXXXX")
 limactl shell wallview -- bash -c '~/build/br/host/bin/aarch64-none-linux-gnu-gcc -O2 -Wall -Wextra -Werror -o "$1" "$2"' \
 	_ "$OUT" "$HERE/cstfw.c"
 [ -s "$OUT" ] || { echo "cstfw was not built" >&2; exit 1; }
+if [ "$CMD" = recover ]; then
+	sum=$(shasum -a 256 "$3" | cut -d' ' -f1)
+	case "$sum" in
+	0496946b*bbf1) ;;
+	*) echo "recover takes only the vendor image (sha256 0496946b...bbf1), got $sum" >&2; exit 2 ;;
+	esac
+fi
 
 $SSH "$PANEL" "R=$R; $LIVE; if [ -d \$R ] && live; then echo 'a flash run is active on the panel: use follow' >&2; exit 75; fi"
 
-took_over=0
+case "$CMD" in
+flash | boot-check | boot-checksum)
+	$SSH "$PANEL" "[ ! -e $MARK ]" && mk=0 || mk=$?
+	case "$mk" in
+	0) ;;
+	255) echo "ssh failed while checking the failed-flash marker" >&2; exit 255 ;;
+	*) state || true; echo "a flash failed earlier: only recover may touch the chip" >&2; exit 2 ;;
+	esac
+	;;
+esac
+
 tk=0
 if [ "$CMD" = recover ]; then
 	$SSH "$PANEL" "R=$R; $LIVE
 		[ \"\$(cat $LOCK/owner 2>/dev/null)\" = '$RUNNER_OWNER' ] || exit 1
 		if [ -d \$R ] && live; then exit 1; fi
-		date '+%Y-%m-%dT%H:%M:%S%z' > $LOCK/since" && took_over=1 || tk=$?
+		mkdir $LOCK/takeover 2>/dev/null || exit 1
+		date '+%Y-%m-%dT%H:%M:%S%z' > $LOCK/since
+		printf '%s\n' '$OWNER' > $LOCK/owner" && took_over=1 || tk=$?
 	if [ "$took_over" = 1 ]; then
 		echo "taking over the lock kept by an earlier flash run"
 	elif [ "$tk" = 255 ]; then
@@ -120,8 +150,8 @@ if [ "$CMD" = recover ]; then
 	fi
 fi
 if [ "$took_over" = 0 ]; then
+	"$REPO/tools/panel-lock.sh" "$PANEL" acquire "$OWNER"
 	locked=1
-	"$REPO/tools/panel-lock.sh" "$PANEL" acquire "$OWNER" || { st=$?; locked=0; exit "$st"; }
 fi
 
 $SSH "$PANEL" "R=$R; $LIVE
@@ -138,7 +168,7 @@ put() {
 	[ -n "$got" ] && [ "$got" = "$(shasum -a 256 "$1" | cut -d' ' -f1)" ] || { echo "upload of $1 to $2 not verified" >&2; return 1; }
 }
 
-$SSH "$PANEL" "command -v sha256sum > /dev/null" || { echo "sha256sum missing on the panel" >&2; exit 3; }
+$SSH "$PANEL" "command -v sha256sum > /dev/null && command -v pidof > /dev/null && [ -r /proc/uptime ]" || { echo "sha256sum, pidof or /proc/uptime missing on the panel" >&2; exit 3; }
 
 case "$CMD" in
 info | boot-check | boot-checksum)
@@ -158,18 +188,30 @@ flash | recover)
 	ARG=recover
 	[ "$CMD" = flash ] && ARG=$4
 	$SSH "$PANEL" "command -v setsid > /dev/null || { echo 'setsid missing on the panel' >&2; exit 3; }
-		mkdir $R && date +%s > $R/started" || { echo "could not claim $R on the panel" >&2; exit 1; }
+		mkdir $R || exit 1
+		cut -d. -f1 /proc/uptime > $R/started && [ -s $R/started ] || { rm -rf $R; exit 1; }" || { echo "could not claim $R on the panel" >&2; exit 1; }
 	if ! { put "$OUT" "$R/cstfw" && put "$HERE/cstfw-run.sh" "$R/cstfw-run.sh" && put "$3" "$R/image.bin"; }; then
 		$SSH "$PANEL" "rm -rf $R" || true
 		exit 1
 	fi
-	$SSH "$PANEL" "chmod +x $R/cstfw &&
-		printf '%s\n' '$RUNNER_OWNER' > $LOCK/owner && date '+%Y-%m-%dT%H:%M:%S%z' > $LOCK/since || exit 1
-		setsid sh $R/cstfw-run.sh '$ARG' < /dev/null > /dev/null 2>&1 &" && locked=0 || {
+	$SSH "$PANEL" "chmod +x $R/cstfw && cut -d. -f1 /proc/uptime > $R/started &&
+		date '+%Y-%m-%dT%H:%M:%S%z' > $LOCK/since && printf '%s\n' '$RUNNER_OWNER' > $LOCK/owner || exit 1
+		rmdir $LOCK/takeover 2>/dev/null
+		setsid sh $R/cstfw-run.sh '$ARG' < /dev/null > /dev/null 2>&1 &" && hs=0 || hs=$?
+	case "$hs" in
+	0) locked=0; took_over=0 ;;
+	255)
+		locked=0
+		took_over=0
+		echo "connection lost at the start: the runner may run. Run: $0 $PANEL follow" >&2
+		exit 255
+		;;
+	*)
 		echo "the runner was not started" >&2
 		state || true
 		exit 1
-	}
+		;;
+	esac
 	follow && rc=0 || rc=$?
 	[ "$rc" = 0 ] || exit "$rc"
 	;;

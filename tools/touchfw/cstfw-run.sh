@@ -7,8 +7,14 @@ RUNNER_OWNER="touch controller flash (cstfw-run)"
 PIDS=/tmp/cstfw.agent-pids
 ARG=$1
 
-echo $$ > "$RUN/pid" || exit 1
 trap '' HUP INT TERM PIPE
+
+bail() {
+	[ "$(cat "$LOCK/owner" 2>/dev/null)" = "$RUNNER_OWNER" ] && [ ! -e "$MARK" ] && rm -rf "$LOCK"
+	exit 1
+}
+
+echo $$ > "$RUN/pid" || bail
 
 finish() {
 	echo "$1" > "$RUN/rc.tmp" && mv "$RUN/rc.tmp" "$RUN/rc"
@@ -21,10 +27,14 @@ refuse() {
 	finish 2
 }
 
-: > "$RUN/log" || exit 1
+: > "$RUN/log" || bail
 [ -n "$ARG" ] || refuse "no argument"
 [ -x "$RUN/cstfw" ] && [ -s "$RUN/cstfw" ] || refuse "no cstfw binary"
 [ -s "$RUN/image.bin" ] || refuse "no image"
+probe=$("$RUN/cstfw" 2>&1)
+[ $? = 2 ] && case "$probe" in usage:*) true ;; *) false ;; esac || refuse "cstfw does not run here"
+awk '$2 == "/data" && $4 ~ /^rw/ { found = 1 } END { exit !found }' /proc/mounts || refuse "/data is not mounted read-write"
+[ -e "$MARK" ] && [ "$ARG" != recover ] && refuse "a flash failed earlier ($(cat "$MARK")): only recover"
 
 bound=0
 [ -e "$D/1-005a" ] && bound=1
@@ -43,10 +53,13 @@ mkdir -p "$(dirname "$MARK")" && printf '%s\n' "$line" > "$MARK" && sync && [ "$
 }
 echo "runner: marker written, driver bound=$bound, earlier failure=$had_mark" >> "$RUN/log"
 
-if [ ! -s "$PIDS" ]; then
-	pidof wallview-agent > "$PIDS" 2>/dev/null
-fi
-for pid in $(cat "$PIDS" 2>/dev/null); do kill -STOP "$pid" 2>/dev/null; done
+agent_pids=
+for pid in $(cat "$PIDS" 2>/dev/null) $(pidof wallview-agent 2>/dev/null); do
+	[ "$(cat "/proc/$pid/comm" 2>/dev/null)" = wallview-agent ] || continue
+	case " $agent_pids " in *" $pid "*) ;; *) agent_pids="$agent_pids $pid" ;; esac
+done
+echo $agent_pids > "$PIDS"
+for pid in $agent_pids; do kill -STOP "$pid" 2>/dev/null; done
 if [ "$bound" = 1 ]; then
 	echo 1-005a > "$D/unbind" || echo "runner: unbind failed" >> "$RUN/log"
 fi
@@ -85,10 +98,15 @@ case "$rc" in
 	;;
 esac
 sync
+rm -f "$RUN/image.bin"
 if [ "$ok" = 1 ]; then
-	for pid in $(cat "$PIDS" 2>/dev/null); do kill -CONT "$pid" 2>/dev/null; done
+	for pid in $(cat "$PIDS" 2>/dev/null); do
+		[ "$(cat "/proc/$pid/comm" 2>/dev/null)" = wallview-agent ] && kill -CONT "$pid" 2>/dev/null
+	done
 	rm -f "$PIDS"
+fi
+echo "$rc" > "$RUN/rc.tmp" && mv "$RUN/rc.tmp" "$RUN/rc"
+if [ "$ok" = 1 ]; then
 	[ "$(cat "$LOCK/owner" 2>/dev/null)" = "$RUNNER_OWNER" ] && rm -rf "$LOCK"
 fi
-rm -f "$RUN/image.bin"
-finish "$rc"
+exit 0
