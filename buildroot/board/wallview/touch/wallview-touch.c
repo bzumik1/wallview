@@ -296,7 +296,7 @@ resample(const struct options *options, int64_t now)
     for (int slot = 0; slot < MAX_SLOTS; slot++) {
         struct contact *c = &contacts[slot];
 
-        if (!c->active || !c->samples)
+        if (!c->active || !c->samples || c->releasing)
             continue;
 
         struct sample *last = &c->history[c->samples - 1];
