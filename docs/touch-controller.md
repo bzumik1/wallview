@@ -250,7 +250,7 @@ The controller itself reports lifts that did not happen while a finger moves: ab
 Static reading of `cst2xx_ts_worker` and the rest of the vendor driver in the Android kernel:
 
 - A lift is reported on the first frame with no pressed point: no debounce, no timer, no count of empty frames. A point is pressed when `(b0 >> 1) & 7 == 3`.
-- The interrupt is requested rising-edge and oneshot. The ESD work runs every 1.2 s (300 jiffies at 250 Hz): `0xD109`, then up to five reads of `0xD040` 4 ms apart, reset when the check fails. While it holds the shared busy flag the worker skips a frame without reading or acknowledging it.
+- The interrupt is requested rising-edge and oneshot. The ESD work runs every 1.0 s (300 jiffies at the vendor kernel's `CONFIG_HZ=300`): `0xD109`, then up to five reads of `0xD040` 4 ms apart, reset when the check fails. While it holds the shared busy flag the worker skips a frame without reading or acknowledging it.
 - There is no factory test, raw-data or diff path: no sysfs, proc, ioctl or misc node. Commands sent: `0xD106` at probe and resume, `0xD105` at suspend, `0xD109` in the ESD work. `0xD101` and `0xD102` are never sent.
 
 ### Flash I²C handler and debug modes
