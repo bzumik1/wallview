@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-62 -60 524 322" width="524" height="322">
+<defs>
+<linearGradient id="g1" gradientUnits="userSpaceOnUse" x1="20" y1="0" x2="130" y2="202"><stop offset="0" stop-color="#78F4FC"/><stop offset="0.3" stop-color="#2BB8FD"/><stop offset="0.62" stop-color="#0880FD"/><stop offset="1" stop-color="#22C0FD"/></linearGradient>
+<linearGradient id="g2" gradientUnits="userSpaceOnUse" x1="130" y1="190" x2="200" y2="10"><stop offset="0" stop-color="#004CD2"/><stop offset="1" stop-color="#0032A2"/></linearGradient>
+<linearGradient id="g3" gradientUnits="userSpaceOnUse" x1="200" y1="0" x2="280" y2="202"><stop offset="0" stop-color="#0054F4"/><stop offset="0.62" stop-color="#0074FD"/><stop offset="1" stop-color="#10B2FD"/></linearGradient>
+<linearGradient id="g4" gradientUnits="userSpaceOnUse" x1="285" y1="170" x2="395" y2="0"><stop offset="0" stop-color="#0042C4"/><stop offset="0.4" stop-color="#0066EA"/><stop offset="0.72" stop-color="#1DA6FC"/><stop offset="1" stop-color="#7AEFFD"/></linearGradient>
+<filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="20"/></filter>
+</defs>
+<g filter="url(#blur)">
+<path d="M220.13 0L179.39 0Q155.39 0 145.01 21.64L85.94 144.69A40 40 0 0 0 158.06 179.31L233.74 21.64Q244.13 0 220.13 0Z" fill="url(#g2)"/>
+<path d="M376.13 0L335.39 0Q311.39 0 301.01 21.64L241.94 144.69A40 40 0 0 0 314.06 179.31L389.74 21.64Q400.13 0 376.13 0Z" fill="url(#g4)"/>
+<path d="M179.87 0L220.61 0Q244.61 0 254.99 21.64L314.06 144.69A40 40 0 0 1 241.94 179.31L166.26 21.64Q155.87 0 179.87 0Z" fill="url(#g3)"/>
+<path d="M23.87 0L64.61 0Q88.61 0 98.99 21.64L158.06 144.69A40 40 0 0 1 85.94 179.31L10.26 21.64Q-0.13 0 23.87 0Z" fill="url(#g1)"/>
+</g>
+</svg>

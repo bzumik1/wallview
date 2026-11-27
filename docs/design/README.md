@@ -14,6 +14,8 @@ The approved WallView OS logo is a blue "W" made of overlapping bands.
 
 ![Logo mark](logo-mark.png)
 
+The vector logo is four bands (two down-strokes in front, the dark up-stroke behind them, the right up-stroke under the middle band) with flat rounded tops and round bottoms. `tools/logo/make-logo.py <dir>` generates it from the band geometry and two palettes: `logo.svg` (the approved colours), `logo-alt.svg` (the same bands shifted towards turquoise and indigo) and `logo-glow.svg` (the logo blurred, with a margin for the blur). The kiosk files in `buildroot/board/wallview/rootfs-overlay/usr/share/wallview/` are its output.
+
 The Home Assistant logo is not used anywhere in the WallView UI or firmware; a home icon or the WallView logo is used instead.
 
 Rejected earlier concept (frame with a wave), kept for history only:
@@ -23,6 +25,8 @@ Rejected earlier concept (frame with a wave), kept for history only:
 ## Boot screen
 
 Static logo from U-Boot and the kernel, then an animated logo in Cog, then a crossfade to the dashboard (see the plan, phase 4).
+
+Animation (chosen 2026-11-27, "breathing"): the logo stands still while a blurred copy of it and a wide blue halo behind it breathe in and out (opacity 0.1 to 0.9, period 3.2 s), and the bands slowly cross-fade into the alternative palette and back (opacity up to 0.7, period 6.4 s). Only opacity changes, so every layer is painted once and the compositor only blends. The frames are locked to 60 fps (Jakub, 2026-11-27): each keyframe interval is 0.1 s (breathing) or 0.2 s (colours) with `steps(6)` or `steps(12)`, so a value changes exactly every 16.7 ms, once per display refresh at 60 Hz; 30 fps would be `steps(3)` and `steps(6)`.
 
 ![Boot screen](boot-screen.png)
 
