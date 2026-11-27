@@ -17,6 +17,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=${TMPDIR:-/tmp}/cstfw
 limactl shell wallview -- ~/build/br/host/bin/aarch64-none-linux-gnu-gcc -O2 -Wall -Wextra -Werror \
 	-o "$OUT" "$HERE/cstfw.c"
+OWNER=${WALLVIEW_AGENT:-panel-cstfw}" · touch controller $2"
+"$HERE/../panel-lock.sh" "$PANEL" acquire "$OWNER"
+trap '"$HERE/../panel-lock.sh" "$PANEL" release "$OWNER"' EXIT
 ssh "$PANEL" 'cat > /tmp/cstfw && chmod +x /tmp/cstfw' < "$OUT"
 ssh "$PANEL" "D=/sys/bus/i2c/drivers/Hynitron-TS
 	echo 1-005a > \$D/unbind
