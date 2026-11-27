@@ -8,24 +8,39 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
-static uint32_t
-primary_plane(int fd)
+#define MAX_PLANES 16
+
+static int
+all_planes(int fd, uint32_t *ids)
 {
     drmModePlaneResPtr planes = drmModeGetPlaneResources(fd);
-    uint32_t found = 0;
+    int count = 0;
 
-    for (uint32_t i = 0; planes && i < planes->count_planes && !found; i++) {
-        drmModeObjectPropertiesPtr props = drmModeObjectGetProperties(fd, planes->planes[i], DRM_MODE_OBJECT_PLANE);
-        for (uint32_t j = 0; props && j < props->count_props; j++) {
-            drmModePropertyPtr prop = drmModeGetProperty(fd, props->props[j]);
-            if (prop && !strcmp(prop->name, "type") && props->prop_values[j] == DRM_PLANE_TYPE_PRIMARY)
-                found = planes->planes[i];
-            drmModeFreeProperty(prop);
-        }
-        drmModeFreeObjectProperties(props);
-    }
+    for (uint32_t i = 0; planes && i < planes->count_planes && count < MAX_PLANES; i++)
+        ids[count++] = planes->planes[i];
     drmModeFreePlaneResources(planes);
-    return found;
+    return count;
+}
+
+static int
+frame_changed(int fd, const uint32_t *ids, uint32_t *last, int count, int *first)
+{
+    int changed = 0;
+
+    for (int i = 0; i < count; i++) {
+        drmModePlanePtr p = drmModeGetPlane(fd, ids[i]);
+        uint32_t fb = p ? p->fb_id : 0;
+
+        if (fb && fb != last[i])
+            changed = 1;
+        last[i] = fb;
+        drmModeFreePlane(p);
+    }
+    if (*first) {
+        *first = 0;
+        return 0;
+    }
+    return changed;
 }
 
 int
@@ -33,37 +48,32 @@ main(int argc, char **argv)
 {
     int seconds = argc > 1 ? atoi(argv[1]) : 10;
     int fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
-    uint32_t plane, last_fb = 0;
+    uint32_t ids[MAX_PLANES], last[MAX_PLANES] = { 0 };
+    int count, first = 1;
     int vblanks = 0, flips = 0, idle_run = 0, longest_gap = 0, gaps[8] = { 0 };
 
     if (fd >= 0)
         drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
-    if (fd < 0 || !(plane = primary_plane(fd))) {
-        fprintf(stderr, "no primary plane\n");
+    if (fd < 0 || !(count = all_planes(fd, ids))) {
+        fprintf(stderr, "no planes\n");
         return 1;
     }
     for (int total = seconds * 60; vblanks < total; vblanks++) {
         drmVBlank vbl = { .request = { .type = DRM_VBLANK_RELATIVE, .sequence = 1 } };
-        drmModePlanePtr p;
 
         if (drmWaitVBlank(fd, &vbl))
             return 1;
-        p = drmModeGetPlane(fd, plane);
-        if (p && p->fb_id != last_fb) {
+        if (frame_changed(fd, ids, last, count, &first)) {
             if (getenv("FLIPMON_TIMES"))
                 fprintf(stderr, "flip %ld.%06ld\n", (long)vbl.reply.tval_sec, (long)vbl.reply.tval_usec);
-            if (last_fb) {
-                flips++;
-                gaps[idle_run < 7 ? idle_run : 7]++;
-                if (idle_run > longest_gap)
-                    longest_gap = idle_run;
-            }
-            last_fb = p->fb_id;
+            flips++;
+            gaps[idle_run < 7 ? idle_run : 7]++;
+            if (idle_run > longest_gap)
+                longest_gap = idle_run;
             idle_run = 0;
         } else {
             idle_run++;
         }
-        drmModeFreePlane(p);
     }
     printf("{\"vblanks\":%d,\"flips\":%d,\"longestGapVblanks\":%d,\"gapHistogram\":[%d,%d,%d,%d,%d,%d,%d,%d]}\n",
            vblanks, flips, longest_gap, gaps[0], gaps[1], gaps[2], gaps[3], gaps[4], gaps[5], gaps[6], gaps[7]);

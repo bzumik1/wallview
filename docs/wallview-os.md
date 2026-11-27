@@ -10,8 +10,10 @@ How the system is put together on the development panel (stock bootloader, Andro
 | `cache` | 384 MB | `primary` slot: 0–64 MiB boot image, 64–320 MiB root file system (EROFS, read-only), 320–384 MiB data (ext4) |
 | `backup` | 112 MB | `golden` slot: boot image only, used as rescue system |
 | `misc` | 4 MB | BCB (`boot-recovery`), boot counter, logs |
+| `system` | 1536 MB | optional Chromium root file system (EROFS, read-only), see [Chromium](#chromium-optional) |
+| `userdata` | 3558 MB | optional Chromium profile (ext4, label `wallview-browser`), created on first Chromium start |
 
-All other partitions (Android `boot`, `system`, `vendor`, `userdata`, ITEAD `oem`, `stback`, …) are untouched. Once Android is removed for good, the eMMC can be repartitioned properly.
+All other partitions (Android `boot`, `vendor`, ITEAD `oem`, `stback`, …) are untouched. Android cannot start any more on a panel whose `system` holds the Chromium image; the full eMMC backup restores it. Once Android is removed for good, the eMMC can be repartitioned properly.
 
 ## Boot flow
 
@@ -35,6 +37,19 @@ Performance (Home Assistant frontend on the PX30, measured 2026-11-26/27 with th
 - Remaining limits found by profiling: WPE's legacy input path (libwpe, used by Cog) sends each touch to the page's main thread before a click or scroll starts and has no kinetic scrolling; WebKit compares the 644 custom properties Home Assistant defines on `:root` repeatedly when they change.
 
 Kiosk browser: `wallview-browser` (`board/wallview/browser/wallview-browser.c`, built in `post-build.sh` when WebKit provides the WPE platform API) is a minimal launcher on WebKit's WPEPlatform DRM backend. Unlike Cog's libwpe path, WPEPlatform recognises gestures in the UI process: drags become wheel events handled by the scrolling thread and taps become clicks without waiting for the page's main thread. It uses the same data directories as Cog (`$XDG_DATA_HOME/wpe`, so the Home Assistant sign-in is kept), runs fullscreen with `WPE_DRM_SCALE=1.5` and reloads the page if the web process dies. Cog stays installed as a fallback: `echo cog > /data/wallview/browser` selects it. WebKit is built with `ENABLE_WPE_PLATFORM=ON` and the DRM backend (`external.mk`) and with `patches/wpewebkit/0001-…` (pointer fast path for custom property comparisons).
+
+### Chromium (optional)
+
+Chromium is a second kiosk engine for comparison and as a fallback; WebKit stays the default. It does not fit the 256 MiB root file system of a slot, so it lives in its own read-only image in the former Android `system` partition, and the kiosk switches to it with `echo chromium > /data/wallview/browser` (any other value, or no file, keeps `wallview-browser`).
+
+- Image: `tools/build-chromium-root.sh` (in the Lima VM) builds a minimal Debian trixie root with `debootstrap` and `chromium cage seatd` plus Mesa, trims docs and locales (keeps `en` and `cs`) and packs it with `mkfs.erofs -zlz4hc,9` into `out/chromium-root.erofs` (about 480 MiB, Chromium 156). `tools/install-chromium.sh <panel-ip>` writes it to the partition named `system` (refuses if it is mounted or too small) and verifies the SHA-256 by reading it back.
+- Start: `wallview-chromium run <url>` (`usr/sbin/wallview-chromium`) mounts the image on `/run/chromium`, bind-mounts `/dev`, `/proc`, `/sys`, `/run/udev`, `resolv.conf` and `/usr/share/wallview`, mounts `userdata` (formats it with `mkfs.ext4 -L wallview-browser` if it is not ext4 or lacks the marker `.wallview-browser`) and runs `seatd-launch -- cage -- chromium` in a chroot. `wallview-chromium installed` checks for the EROFS magic in `system`. Extra flags: `/data/wallview/chromium-args`.
+- Window: desktop Chromium keeps a minimum window width of 500 px, so `--kiosk` alone gives a 500×480 window with 20 px off screen; `--app=<url>` alone gives 480×480 with a 56 px title bar (cage has no server-side decorations). `--kiosk --app=<url>` gives exactly 480×480. (Android used the System WebView, which has no minimum size.)
+- Scale: `--force-device-scale-factor=1.5` keeps a 480 CSS px wide viewport (rendered at 720 px). A default page zoom of 150 % (`partition.default_zoom_level` 2.2239 = log(1.5)/log(1.2) in `Default/Preferences`) gives the same 320×320 CSS px layout as WebKit at `devicePixelRatio` 1.5; `wallview-chromium` writes it when the profile has no `Preferences` yet (checked by editing an existing profile; the seeding of a new profile is not tested on the panel yet).
+- Sign-in: the same launcher page and WallView integration flow as with WebKit; the agent's restart of the kiosk (`Sign in again`, URL change) also kills `cage`, so the loop starts Chromium again with the new sign-in generation. The launcher (`file://`) fetches the Home Assistant API, which Chromium allows only with `--disable-web-security`; moving the pairing into the agent would remove that flag.
+- Frames: cage scans Chromium's buffers out on a different plane than WebKit uses; `tools/perf/flipmon.c` therefore counts a frame when the framebuffer of any plane changes.
+
+Results against WebKit are in the performance notes ("Chromium and WebKit, same method").
 
 Profiling the kiosk: CI uploads the unstripped `libWPEWebKit-2.0.so` from the Buildroot staging directory as the `webkit-symbols` artifact of each run, so `perf` samples taken on the panel (`perf record -e cpu-clock -g -t <WebProcess main thread>`) can be symbolised (`perf report --symfs <dir with usr/lib/libWPEWebKit-2.0.so.1.x>`). The symbols must come from the same run as the installed rootfs. The WebKit remote inspector is enabled with `WEBKIT_INSPECTOR_HTTP_SERVER=0.0.0.0:9222` (Cog `--enable-developer-extras=true`); the probe scripts used for the measurements are listed in the performance notes below.
 

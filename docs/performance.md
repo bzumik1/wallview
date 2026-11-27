@@ -49,7 +49,7 @@ Build both with the Buildroot cross compiler, e.g. `host/bin/aarch64-none-linux-
 | media | 58 / 31 | 55 / 52 |
 | settings | 48 / 27 | 51 / 38 |
 
-Chromium's window is 500×480 (Chromium's minimum window width is 500 px), i.e. 4 % more pixels. With `--force-device-scale-factor=1.5` under cage it rendered only a 320×320 window, so those first numbers were discarded.
+Chromium's window is 500×480 (Chromium's minimum window width is 500 px), i.e. 4 % more pixels. With `--force-device-scale-factor=1.5` under cage it rendered only a 320×320 window, so those first numbers were discarded. Both are solved since: `--kiosk --app=<url>` gives exactly 480×480 and a 150 % default page zoom the same 320×320 CSS px layout as WebKit (see `wallview-os.md`, Chromium).
 
 ## Real touch scrolling (display frames)
 
@@ -104,6 +104,20 @@ The controller firmware, its update protocol and what it would take to raise the
 
 Neither engine holds 60 fps yet; Chromium is close because touch scrolling runs on its compositor thread with GPU raster. During Chromium swipes the GPU is about 3 % busy and the CPU 30 %, so the remaining missed frames are deadline/scheduling problems, not throughput. Disabling the deep idle states (`cpu-sleep` 370 µs, `cluster-sleep` 900 µs exit latency) made no measurable difference (lights 46–57 fps).
 
+### Chromium and WebKit, same method (2026-11-27)
+
+Same panel, same system (PR #9 image), same synthetic input (`touchplay`, 120 Hz uinput swipes, 8 per run) and the same metric: vblanks without a new frame from 100 ms after touch down to 150 ms after release, when the content has to move in every vblank. Two interleaved rounds per value, total in brackets. Chromium 156 from the `system` partition, `--kiosk --app`, page zoom 150 % (320×320 CSS px like WebKit), no other tuning. WebKit = `wallview-browser` with patches `0001`–`0007` (PR #9) and the vblank thread at `SCHED_RR` 5; "+ `0009`" was measured by the WebKit expert in another session with a binary-patched library that forces the decision of patch `0009` (touch drags stay on the scrolling thread in synchronous wheel regions).
+
+| View | WebKit, PR #9 | WebKit + `0009` | Chromium 156 |
+|---|---|---|---|
+| climate | 3.8 / 13.7 (8.7 %) | 9.1 / 8.3 (8.7 %) | 10.8 / 9.3 (10.0 %) |
+| settings | 36.5 / 46.8 (41.7 %) | 5.8 / 8.3 (7.1 %) | 4.0 / 11.9 (8.0 %) |
+| lights | 0.7 / 3.3 (2.0 %) | 0.6 / 1.3 (1.0 %) | 4.8 / 13.4 (9.1 %) |
+
+With `0009` the two engines are within the noise of each other on climate and settings, WebKit is better on lights, and neither holds 60 fps. Settings without `0009` is slow in WebKit because the chart on that view registers a non-passive wheel listener, which sent the touch drag's wheel events through the busy main thread (details in the patch header). Current choice: WebKit stays the kiosk engine, Chromium stays installed as a tested fallback. Reasons: WebKit can still be fixed where it loses frames (the remaining misses are late frames, which kernel and scheduling work helps in both engines), the Debian Chromium cannot be patched in our CI, and WebKit's image is 177 MiB against 480 MiB.
+
+The first Chromium run reported 95–100 % misses, which was a measurement error: the test restarted the kiosk loop without stopping the previous one, so two cage instances fought over the display, and `flipmon` watched only the first primary plane, while cage scans Chromium's buffers out on another plane. `flipmon` now counts a frame when the framebuffer of any plane changes.
+
 ## Findings
 
 - Rendering backend is not the limit: GPU vs CPU Skia raster, device scale 1 vs 1.5, Cog `renderer=modeset` vs `gles` all gave the same 7–8 fps of programmatic scrolling on the overview.
@@ -134,4 +148,4 @@ Measured on the panel with real touch drags (expert analysis, Cog/libwpe): the d
 1. WebKit with WPEPlatform + custom-property patch + `wallview-browser` (CI build running), then measure real touch scrolling.
 2. Expert analysis of the JSC and RenderLayer hot spots (flags, patches, build options).
 3. Measurement of what reaches the display (DRM page flips) and touch replay through uinput (kernel option needed).
-4. If Chromium stays clearly better: it needs a larger root file system than the 256 MiB slot, i.e. repartitioning the eMMC (owner's decision).
+4. Chromium is installed as a fallback in the former Android `system` partition (no repartitioning needed); switching to it is `echo chromium > /data/wallview/browser`.
