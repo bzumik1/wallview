@@ -17,3 +17,5 @@ Line format, as written by `tools/perf/touchprobe.c`:
 
 `touch-counter-idle-2026-11-27.txt` (30 s, no touch): 83 frames/s, no INT.
 `touch-counter-finger-2026-11-27.txt` (45 s): resting finger about 38 frames/s (INT about 38/s), slow circles 48–53 frames/s (INT 42–44/s).
+`touch-counter-poll12-2026-11-28.txt` (30 s, no touch, `0xD000` read and acknowledged every 12 ms): 83.5 frames/s.
+`touch-counter-idle-2026-11-28.txt` (30 s, no touch, counter only, control): 83.5 frames/s.

@@ -337,6 +337,10 @@ No configuration byte changes the noise path, and nothing in it explains the 10�
 
 A code patch would be needed to change the row correction (`cmp r1, #60` at `0x08ac`, and the −40/40 limits at `0x069c`/`0x06b8`). Do not try it before experiment 1, and only through the review rule for risky changes: weaker noise suppression gives jitter and ghost touches near mains wiring, which a short bench test does not show.
 
+### Does the host's I²C read slow the scan? (measured 2026-11-28)
+
+Experiment 1 above, run with no finger on the glass: `touchprobe` reading `0xD000` (28 bytes, 3.8 ms per read at 100 kHz) and acknowledging every 12 ms gave 83.5 frames/s, the same as the control run with only the frame counter (83.5) and the earlier idle run (83.3); 1 s windows 83–84 in all three. The host's read does not slow the scan, so a faster I²C bus or shorter reads would not raise the frame rate. The extra 8–14 ms of a touched frame are work inside the ROM (scan, tracking or report building) in frames with a touch. Captures: `tools/perf/captures/touch-counter-poll12-2026-11-28.txt`, `touch-counter-idle-2026-11-28.txt`.
+
 ### Sister-chip documents
 
 - CST3240 Application Manual: same protocol (`0xD000` 7-byte reads, `0xD000 0xAB` acknowledge, status `0x06` pressed and `0x00` released, `0xD101` info mode, `0xD109` normal mode, info rows `0xD1F4–0xD20C`, same boot loader sequence). The chip has "noise listening" and "frequency hopping". Nothing on report rate, front-end parameters or debug data modes.
