@@ -6,6 +6,17 @@
  *   cstfw boot-checksum  like boot-check, plus read 0xA000/0xA008 in boot mode (plan (a) step 3)
  *   cstfw flash <image> --current-checksum <0x...> --erase-and-program
  *                        program a 7680-byte image with the vendor protocol
+ *   cstfw flash <vendor image> --recover --erase-and-program
+ *                        the same without reading the chip first, for a chip whose
+ *                        application no longer answers (after a failed flash); only
+ *                        the vendor image (checksum 0x99630e41) is accepted
+ *
+ * Exit codes: 0 programmed, verified and the new application answers (or the
+ * read-only command succeeded); 2 refused before touching the chip; 3 refused
+ * after reading the chip (identification or checksum differs, or the chip did
+ * not answer), nothing written; 1 programming failed, the flash may be partly
+ * written; 4 programmed and verified by the boot loader, but the application
+ * does not answer as expected afterwards.
  *
  * info, boot-check and boot-checksum never write the controller's flash. flash
  * does, and is the only command that can leave the controller without a working
@@ -137,8 +148,8 @@ open_reset(void)
         return -1;
     }
     if (ioctl(chip, GPIO_GET_CHIPINFO_IOCTL, &chipinfo) < 0 || strcmp(chipinfo.label, GPIOCHIP_LABEL)) {
-        fprintf(stderr, "cstfw: %s is \"%s\", expected \"%s\"; reset line not touched\n", GPIOCHIP, chipinfo.label,
-                GPIOCHIP_LABEL);
+        fprintf(stderr, "cstfw: %s is \"%s\", expected \"%s\"; reset line not touched\n", GPIOCHIP,
+                chipinfo.label[0] ? chipinfo.label : "?", GPIOCHIP_LABEL);
         goto out;
     }
     if (ioctl(chip, GPIO_GET_LINEINFO_IOCTL, &line) < 0 || (line.flags & GPIOLINE_FLAG_KERNEL)) {
@@ -356,7 +367,7 @@ flash_once(const uint8_t *img)
 }
 
 static int
-flash(const char *path, uint32_t current)
+flash(const char *path, int recover, uint32_t current)
 {
     static uint8_t img[IMAGE_SIZE + 1];
     uint8_t chip[28];
@@ -365,28 +376,39 @@ flash(const char *path, uint32_t current)
         return 2;
     printf("image %s: version 0x%08x, checksum 0x%08x%s\n", path, le32(img + 0x1df8), le32(img + 0x1dfc),
            le32(img + 0x1dfc) == VENDOR_CHECKSUM ? " (vendor image)" : " (MODIFIED image)");
-    printf("chip before:\n");
-    if (info_read(chip, 1)) {
-        fprintf(stderr, "cstfw: chip info not readable; refusing to flash\n");
-        return 2;
+    if (recover) {
+        if (le32(img + 0x1dfc) != VENDOR_CHECKSUM) {
+            fprintf(stderr, "cstfw: --recover takes only the vendor image (checksum 0x%08x)\n", VENDOR_CHECKSUM);
+            return 2;
+        }
+        printf("recover: chip not read first\n");
+        if (open_reset())
+            return 2;
+    } else {
+        if (open_reset())
+            return 2;
+        printf("chip before:\n");
+        if (info_read(chip, 1)) {
+            fprintf(stderr, "cstfw: chip info not readable; refusing to flash (use --recover with the vendor image)\n");
+            return 3;
+        }
+        if (memcmp(chip, ident, sizeof(ident))) {
+            fprintf(stderr, "cstfw: chip identification differs from the image; refusing to flash\n");
+            return 3;
+        }
+        if (le32(chip + 24) != current) {
+            fprintf(stderr, "cstfw: chip checksum 0x%08x, --current-checksum 0x%08x; refusing to flash\n",
+                    le32(chip + 24), current);
+            return 3;
+        }
     }
-    if (memcmp(chip, ident, sizeof(ident))) {
-        fprintf(stderr, "cstfw: chip identification differs from the image; refusing to flash\n");
-        return 2;
-    }
-    if (le32(chip + 24) != current) {
-        fprintf(stderr, "cstfw: chip checksum 0x%08x, --current-checksum 0x%08x; refusing to flash\n", le32(chip + 24),
-                current);
-        return 2;
-    }
-    if (open_reset())
-        return 2;
 
     /* From here an interruption could leave a partly programmed flash: nothing may stop us. */
     signal(SIGPIPE, SIG_IGN);
     signal(SIGHUP, SIG_IGN);
     signal(SIGINT, SIG_IGN);
     signal(SIGTERM, SIG_IGN);
+    signal(SIGQUIT, SIG_IGN);
 
     /* Like the vendor driver: on any failure start again from reset and page 0, up to 5 times. */
     for (int attempt = 1; attempt <= 5; attempt++) {
@@ -394,13 +416,16 @@ flash(const char *path, uint32_t current)
         fflush(stdout);
         if (flash_once(img) == 0) {
             sleep_ms(60);
-            printf("programmed and verified; chip after:\n");
-            info_read(NULL, 1);
+            printf("programmed and verified by the boot loader; chip after:\n");
+            if (info_read(chip, 1) || memcmp(chip, ident, sizeof(ident)) || le32(chip + 24) != le32(img + 0x1dfc)) {
+                fprintf(stderr, "cstfw: the new application does not answer as expected\n");
+                return 4;
+            }
             return 0;
         }
     }
     fprintf(stderr, "cstfw: FAILED after 5 attempts. Do not power off and do not bind the driver;\n"
-                    "       run the same flash command again (with --current-checksum of whatever info shows).\n");
+                    "       flash the vendor image with --recover.\n");
     return 1;
 }
 
@@ -409,13 +434,27 @@ main(int argc, char **argv)
 {
     int is_flash = argc == 6 && !strcmp(argv[1], "flash") && !strcmp(argv[3], "--current-checksum") &&
                    !strcmp(argv[5], "--erase-and-program");
+    int is_recover = argc == 5 && !strcmp(argv[1], "flash") && !strcmp(argv[3], "--recover") &&
+                     !strcmp(argv[4], "--erase-and-program");
+    unsigned long current = 0;
     int simple = argc == 2 && (!strcmp(argv[1], "info") || !strcmp(argv[1], "boot-check") ||
                                !strcmp(argv[1], "boot-checksum"));
 
-    if (!is_flash && !simple) {
+    if (!is_flash && !is_recover && !simple) {
         fprintf(stderr, "usage: cstfw info|boot-check|boot-checksum\n"
-                        "       cstfw flash <image> --current-checksum <0x...> --erase-and-program\n");
+                        "       cstfw flash <image> --current-checksum <0x...> --erase-and-program\n"
+                        "       cstfw flash <vendor image> --recover --erase-and-program\n");
         return 2;
+    }
+    if (is_flash) {
+        char *end;
+
+        errno = 0;
+        current = strtoul(argv[4], &end, 16);
+        if (strncmp(argv[4], "0x", 2) || end == argv[4] + 2 || *end || errno || current > 0xffffffffUL) {
+            fprintf(stderr, "cstfw: --current-checksum must be 0x followed by up to 8 hex digits\n");
+            return 2;
+        }
     }
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (access(DRIVER_LINK, F_OK) == 0) {
@@ -427,8 +466,8 @@ main(int argc, char **argv)
         perror("cstfw: " I2C_DEV);
         return 2;
     }
-    if (is_flash)
-        return flash(argv[2], (uint32_t)strtoul(argv[4], NULL, 0));
+    if (is_flash || is_recover)
+        return flash(argv[2], is_recover, (uint32_t)current);
     if (!strcmp(argv[1], "info"))
         return info_read(NULL, 1);
     return boot_check(!strcmp(argv[1], "boot-checksum"));

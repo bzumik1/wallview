@@ -278,10 +278,19 @@ resample(const struct options *options, int64_t now)
 static int dropped;
 static int input_fd;
 
-/* After SYN_DROPPED: end every contact the device no longer reports, as libevdev would. */
+/*
+ * After SYN_DROPPED: end every contact the device no longer reports and take
+ * the current slot again, so that later events land on the right contact.
+ * Contacts that began during the drop are picked up at their next touch.
+ */
 static void
-resync(int64_t time)
+resync(int64_t time, int *slot)
 {
+    struct input_absinfo current_slot;
+
+    if (ioctl(input_fd, EVIOCGABS(ABS_MT_SLOT), &current_slot) == 0 && current_slot.value >= 0 &&
+        current_slot.value < MAX_SLOTS)
+        *slot = current_slot.value;
     struct {
         uint32_t code;
         int32_t values[MAX_SLOTS];
@@ -310,7 +319,7 @@ handle_event(const struct input_event *event, int *slot)
     if (dropped) {
         if (event->type == EV_SYN && event->code == SYN_REPORT) {
             dropped = 0;
-            resync(time);
+            resync(time, slot);
         }
         return;
     }
@@ -462,6 +471,13 @@ main(int argc, char **argv)
         fprintf(stderr, "wallview-touch: grab: %s\n", strerror(errno));
         return 1;
     }
+    /* Events queued before the grab were already seen by the browser on the raw device: discard them. */
+    {
+        struct input_event stale[64];
+
+        while (read(input, stale, sizeof(stale)) > 0)
+            ;
+    }
     output = create_output(input);
     if (output < 0) {
         fprintf(stderr, "wallview-touch: uinput: %s\n", strerror(errno));
@@ -480,7 +496,14 @@ main(int argc, char **argv)
         return 1;
     }
 
+    /* The kernel only sends ABS_MT_SLOT when it changes: start from its current slot, not 0. */
     int slot = 0;
+    struct input_absinfo current_slot;
+
+    if (ioctl(input, EVIOCGABS(ABS_MT_SLOT), &current_slot) == 0 && current_slot.value >= 0 &&
+        current_slot.value < MAX_SLOTS)
+        slot = current_slot.value;
+
     struct pollfd fds[2] = { { input, POLLIN, 0 }, { timer, POLLIN, 0 } };
 
     for (;;) {

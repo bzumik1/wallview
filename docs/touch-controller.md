@@ -24,18 +24,21 @@ The vendor firmware is not distributed: it stays in the git-ignored `local/firmw
 
 ## Tools (`tools/touchfw/`)
 
-Written 2026-11-27 for the 120 Hz goal and reviewed once (independent senior embedded review); not run on hardware yet.
+Written 2026-11-27 for the 120 Hz goal and reviewed in rounds by an independent senior embedded reviewer; not run on hardware yet.
 
-- `cstfw.c`:
+- `cstfw.c` (runs on the panel, refuses while the kernel driver is bound):
   - `info`: step 1, trailer registers in info mode.
   - `boot-check`: step 2, reset, `A0 01 AA`, `0xA003 == 0x55`, reset. Sends no erase, page or data command.
-  - `boot-checksum`: plan (a) step 3, as `boot-check` plus `0xA000`/`0xA008` in boot mode; prints "no checksum available" unless `0xA000 == 01`.
-  - `flash <image> --current-checksum <0x...> --erase-and-program`: plan (a)/(b), the vendor sequence from the table below, 5 attempts from page 0. Before anything is written it reads the chip and refuses unless the chip's identification (`0xD1F4–0xD207`) equals the image's and the chip's `0xD20C` equals `--current-checksum`; it also refuses an image with the wrong size, identification or checksum. From the first reset on it ignores SIGHUP, SIGINT, SIGTERM and SIGPIPE.
-  - Reads are a register write with STOP and a separate read, as the vendor driver does. The reset line is only touched if `/dev/gpiochip0` is `gpio0` and line 12 is unused. Every command refuses to run while the kernel driver is bound.
-- `panel-cstfw.sh root@<panel> info|boot-check|boot-checksum` or `... flash <image> <current-checksum> --erase-and-program`:
-  - builds `cstfw` in the Lima VM into `out/cstfw/`, takes the panel lock (`tools/panel-lock.sh`), unbinds the driver, runs `cstfw` and binds the driver again; checks the bind and `wallview-touch` afterwards.
-  - Non-flash commands rebind through a remote trap even if the connection drops.
-  - `flash` runs detached on the panel (`setsid`, log `/tmp/cstfw.log`), so losing SSH cannot stop it between pages. After a failed flash the driver is deliberately not bound again; run the same flash again.
+  - `boot-checksum`: as `boot-check` plus `0xA000`/`0xA008`; expect "no checksum available" (the vendor reads them only after programming).
+  - `flash <image> --current-checksum <0x...> --erase-and-program`: plan (a)/(b), the vendor sequence from the table below, 5 attempts from page 0. Reads the chip first and refuses unless its identification (`0xD1F4–0xD207`) equals the image's and `0xD20C` equals `--current-checksum`. After programming it checks that the new application answers with the image's checksum.
+  - `flash <vendor image> --recover --erase-and-program`: the same without reading the chip first, for a chip whose application no longer answers; only the vendor image is accepted.
+  - From the first reset on, flash ignores HUP, INT, TERM, QUIT and PIPE. Reads are write+STOP+read like the vendor driver. The reset line is used only if `/dev/gpiochip0` is `gpio0` and line 12 is free.
+  - Exit codes: 0 done; 2 refused before touching the chip; 3 refused after reading it (nothing written); 1 programming failed (flash may be partly written); 4 programmed but the new application does not answer as expected.
+- `panel-cstfw.sh root@<panel> info|boot-check|boot-checksum|flash <image> <checksum> --erase-and-program|recover <vendor image> --erase-and-program|follow` (Mac):
+  - builds `cstfw` in the Lima VM into `out/cstfw/` and takes the panel lock (`tools/panel-lock.sh`).
+  - info/boot-check/boot-checksum unbind the driver only if bound and bind it again (remote trap, also on a dropped connection) only if it was bound and no flash has failed.
+  - flash/recover start `cstfw-run.sh` detached on the panel (`setsid`, one run at a time via `/tmp/cstfw.run/`), which pauses the agent (SIGSTOP, so a reboot from Home Assistant cannot hit the flash), unbinds, flashes and, from then on, owns the lock. Losing SSH or Ctrl-C cannot stop or unlock it; `follow` attaches again.
+  - On 0, 2 or 3 the runner binds the driver (if it was bound and nothing failed before), resumes the agent and releases the lock. On any other result it creates `/tmp/cstfw.failed` and leaves the driver unbound, the agent paused and the lock held: nothing else should touch the chip until `recover` succeeds.
 - `cstimg.py show|set`: shows the suspected front-end fields of an image (with sha256 and whether it is the vendor image), or writes a new file (never the input or an existing file) with changed bytes of the main configuration table `0x1604–0x16cb` and a recomputed checksum; version unchanged.
 
 What must be true before `flash` is ever run (the revert guarantee):
@@ -45,7 +48,7 @@ What must be true before `flash` is ever run (the revert guarantee):
 3. `0xD20C` is served from the flash trailer, not computed, so it does not prove the content. Only a boot-loader checksum (`boot-checksum`, if it gives one) or the vendor kernel's behaviour supports it.
 4. The page-select encoding (`A0 14 <lo> <hi>`) and the data registers `0xA018 + 4k` (up to `0xA214`) have been checked against the vendor disassembly by a second reader.
 5. The vendor Android `boot.img` has been booted once on the development panel (plan (a) step 6 fallback).
-6. Stable power. The first flash is the unmodified vendor image. Jakub accepts that recovery is inferred until that first re-flash has succeeded.
+6. Stable power, nothing else using the panel. The first flash is the unmodified vendor image. Jakub accepts that recovery is inferred until that first re-flash has succeeded.
 
 Typical session, each step with the owner's approval:
 
@@ -58,6 +61,8 @@ tools/touchfw/panel-cstfw.sh root@PANEL flash local/firmware/hynitron/cst226se-v
 tools/touchfw/cstimg.py set local/firmware/hynitron/cst226se-vendor-0x03000001.bin local/firmware/hynitron/try-166a-10.bin 0x166a=10
 tools/touchfw/panel-cstfw.sh root@PANEL flash local/firmware/hynitron/try-166a-10.bin 0x99630e41 --erase-and-program
 # measure with tools/perf/touchprobe; back to the vendor image with --current-checksum of the try image
+# after a failed flash (driver unbound, lock held by the failed run):
+tools/touchfw/panel-cstfw.sh root@PANEL recover local/firmware/hynitron/cst226se-vendor-0x03000001.bin --erase-and-program
 ```
 
 ## Where the firmware is
