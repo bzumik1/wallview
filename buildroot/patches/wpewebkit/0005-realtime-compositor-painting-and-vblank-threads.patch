@@ -1,0 +1,66 @@
+From: WallView
+Subject: [PATCH] Run the compositor, the tile painting workers and the DRM
+ vblank observer as real-time threads
+
+The scrolling thread and the IPC queues already run with SCHED_RR
+(Thread::QOS::UserInteractive, RealTimeThreads), but the threads that
+turn their work into a frame did not: ThreadedCompositor, the Skia
+painting workers the compositor waits for, and WPEScreenSyncObserverDRM,
+which starts every frame by delivering the display refresh to the
+DisplayLink. On the NSPanel (4 cores, HZ=250, web process main thread at
+100 % while scrolling a Home Assistant dashboard) they were woken up to
+7 ms late, which is most of the time left before the next vblank.
+
+WorkerPool has no QoS parameter, so the painting workers register
+themselves with RealTimeThreads when they run their first task.
+
+Upstream-Status: Pending
+---
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/CompositingRunLoop.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/CompositingRunLoop.cpp
+@@ -43,7 +43,7 @@
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(CompositingRunLoop);
+ 
+ CompositingRunLoop::CompositingRunLoop(Function<void ()>&& updateFunction)
+-    : m_runLoop(RunLoop::create("org.webkit.ThreadedCompositor"_s, ThreadType::Graphics))
++    : m_runLoop(RunLoop::create("org.webkit.ThreadedCompositor"_s, ThreadType::Graphics, Thread::QOS::UserInteractive))
+     , m_updateTimer(m_runLoop.get(), "CompositingRunLoop::UpdateTimer"_s, this, &CompositingRunLoop::updateTimerFired)
+     , m_updateFunction(WTFMove(updateFunction))
+ {
+--- a/Source/WebKit/WPEPlatform/wpe/WPEScreenSyncObserverDRM.cpp
++++ b/Source/WebKit/WPEPlatform/wpe/WPEScreenSyncObserverDRM.cpp
+@@ -145,7 +145,7 @@
+                     priv->state = State::Failed;
+                 }
+             }
+-        }, ThreadType::Graphics, Thread::QOS::Default);
++        }, ThreadType::Graphics, Thread::QOS::UserInteractive);
+     } else
+         priv->condition.notifyAll();
+ }
+--- a/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.cpp
++++ b/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.cpp
+@@ -45,6 +45,10 @@
+ #include <wtf/SystemTracing.h>
+ #include <wtf/text/StringToIntegerConversion.h>
+ 
++#if OS(LINUX)
++#include <wtf/linux/RealTimeThreads.h>
++#endif
++
+ namespace WebCore {
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(SkiaPaintingEngine);
+@@ -268,6 +272,12 @@
+ 
+     auto& workerPool = renderingMode == RenderingMode::Accelerated ? *m_gpuWorkerPool.get() : *m_cpuWorkerPool.get();
+     workerPool.postTask([buffer = Ref { buffer }, dirtyRect, recording = RefPtr { recording }]() mutable {
++#if OS(LINUX)
++        static thread_local bool isRegisteredAsRealTimeThread = false;
++        if (!std::exchange(isRegisteredAsRealTimeThread, true))
++            RealTimeThreads::singleton().registerThread(Thread::currentSingleton());
++#endif
++
+         auto* canvas = buffer->canvas();
+         if (!canvas) {
+             buffer->completePainting();

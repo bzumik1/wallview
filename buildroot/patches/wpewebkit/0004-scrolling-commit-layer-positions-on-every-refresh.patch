@@ -1,0 +1,44 @@
+From: WallView
+Subject: [PATCH] ThreadedScrollingTree: commit layer positions on every display
+ refresh with coordinated graphics
+
+displayDidRefreshOnScrollingThread() only applied layer positions when
+the tree was not in the Idle synchronization state. In Idle it relied on
+the main thread: either a rendering update was already scheduled
+(m_renderingUpdateWasScheduled, then a 1 ms timer desynchronizes), or
+nothing happened until the main thread ran
+scrollingThreadAddedPendingUpdate(). Kinetic scrolling changes the scroll
+position in serviceScrollAnimations(), after the flag was last set, and
+wheel events handled while the main thread is busy cannot set it either,
+so a main thread task that started in the Idle state froze the scrolled
+layers until the main thread was free again (40 ms of script = 2-3
+missed frames on the NSPanel), although wheel events, display refresh
+notifications and the compositor did not depend on the main thread.
+
+With coordinated graphics the scrolling thread only updates a layer
+property and asks the threaded compositor for a frame, so do that on
+every display refresh, whatever the synchronization state. A position
+that did not change does not request a composition.
+
+WALLVIEW_WEBKIT_NO_SCROLL_COMMIT (any value) restores the old behaviour
+for A/B measurements.
+
+Upstream-Status: Pending
+---
+--- a/Source/WebCore/page/scrolling/ThreadedScrollingTree.cpp
++++ b/Source/WebCore/page/scrolling/ThreadedScrollingTree.cpp
+@@ -513,7 +513,13 @@
+     m_lastDisplayDidRefreshTime = now;
+     serviceScrollAnimations(now);
+ 
+-    if (m_state != SynchronizationState::Idle && canUpdateLayersOnScrollingThread())
++#if USE(COORDINATED_GRAPHICS)
++    static bool isDisabled = !!getenv("WALLVIEW_WEBKIT_NO_SCROLL_COMMIT");
++    bool shouldApplyLayerPositions = isDisabled ? m_state != SynchronizationState::Idle : true;
++#else
++    bool shouldApplyLayerPositions = m_state != SynchronizationState::Idle;
++#endif
++    if (shouldApplyLayerPositions && canUpdateLayersOnScrollingThread())
+         applyLayerPositionsInternal();
+ 
+     switch (m_state) {
