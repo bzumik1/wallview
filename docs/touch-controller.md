@@ -24,7 +24,7 @@ The vendor firmware is not distributed: it stays in the git-ignored `local/firmw
 
 ## Tools (`tools/touchfw/`)
 
-Written 2026-11-27 for the 120 Hz goal and reviewed in rounds by an independent senior embedded reviewer; not run on hardware yet.
+Written 2026-11-27 for the 120 Hz goal and reviewed in rounds by an independent senior embedded reviewer. Run on the development panel on 2026-11-27: info, boot-check, boot-checksum and two no-op re-flashes of the vendor image, all rc 0.
 
 - `cstfw.c` (runs on the panel, refuses while the kernel driver is bound):
   - `info`: step 1, trailer registers in info mode.
@@ -33,25 +33,32 @@ Written 2026-11-27 for the 120 Hz goal and reviewed in rounds by an independent 
   - `flash <image> --current-checksum <0x...> --erase-and-program`: plan (a)/(b), the vendor sequence from the table below, 5 attempts from page 0. Reads the chip first and refuses unless its identification (`0xD1F4–0xD207`) equals the image's and `0xD20C` equals `--current-checksum`. After programming it checks that the new application answers with the image's checksum.
   - `flash <vendor image> --recover --erase-and-program`: the same without reading the chip first, for a chip whose application no longer answers; only the vendor image is accepted.
   - From the first reset on, flash ignores HUP, INT, TERM, QUIT and PIPE. Reads are write+STOP+read like the vendor driver. The reset line is used only if `/dev/gpiochip0` is `gpio0` and line 12 is free.
-  - Exit codes: 0 done; 2 refused before touching the chip; 3 refused after reading it (nothing written); 5 boot mode never reached (nothing written); 1 programming failed (flash may be partly written); 4 programmed but the new application does not answer as expected (checked three times over about 1 s).
-- `panel-cstfw.sh root@<panel> info|boot-check|boot-checksum|flash <image> <checksum> --erase-and-program|recover <vendor image> --erase-and-program|follow` (Mac):
-  - builds `cstfw` in the Lima VM into `out/cstfw/` and takes the panel lock (`tools/panel-lock.sh`).
+  - Exit codes: 0 done (prints `cstfw: done and verified`); 2 refused before touching the chip; 3 refused after reading it (nothing written); 5 boot mode never reached (nothing written); 1 programming failed (flash may be partly written); 4 programmed but the new application does not answer as expected (checked three times over about 1 s).
+- `panel-cstfw.sh root@<panel> info|boot-check|boot-checksum|flash <image> <checksum> --erase-and-program|recover <vendor image> --erase-and-program|follow|state` (Mac):
+  - builds `cstfw` in the Lima VM into a fresh temporary file under `out/cstfw/` and takes the panel lock (`tools/panel-lock.sh`) before it touches anything on the panel. Every upload is checked with sha256 on both sides.
   - info/boot-check/boot-checksum unbind the driver only if bound and bind it again (remote trap, also on a dropped connection) only if it was bound and no flash has failed.
-  - flash/recover start `cstfw-run.sh` detached on the panel (`setsid`, one run at a time via `/tmp/cstfw.run/`) and hand the panel lock to it in the same command (owner `touch controller flash (cstfw-run)`); from then on the Mac side cannot release it. Losing SSH or Ctrl-C cannot stop or unlock the flash; `follow` attaches again.
-  - The runner pauses the agent (SIGSTOP, so a reboot from Home Assistant cannot hit the flash; the hardware watchdog is fed by the BusyBox daemon, not the agent), unbinds the driver and writes the persistent marker `/data/wallview/cstfw-failed` before the first attempt.
-  - On 0, or on 2/3/5 without an earlier failure, it removes the marker, binds the driver (if it was bound), resumes the agent and releases the lock. Otherwise the marker stays, the driver unbound, the agent paused and the lock held by the runner; only `recover` acts then, taking over that lock. After a reboot (lock and pauses gone, marker kept) `recover` works the same through the normal lock.
+  - flash/recover claim `/tmp/cstfw.run/` under the lock, upload `cstfw`, the runner and the image into it, then hand the panel lock to the runner (owner `touch controller flash (cstfw-run)`) in the same command that starts it detached (`setsid`). From then on the Mac side cannot release it; losing SSH or Ctrl-C cannot stop or unlock the flash; `follow` attaches again, `state` prints marker, lock, driver, paused agent and run.
+  - A run directory is stale (its log is kept as `/data/wallview/cstfw-last.log`, then it is removed under the lock) when it has a result, or its runner pid is dead, or it has no pid and was claimed more than 120 s of uptime ago (or has no claim time).
+  - While the failed-flash marker exists, `flash`, `boot-check` and `boot-checksum` refuse (wrapper and runner); only `recover` may touch the chip. `recover` accepts only the vendor image (sha256 checked on the Mac).
+  - The lock owner includes the wrapper's pid and start time, so two wrappers on one Mac never share it. During a takeover the lock owner stays the runner's; the taking-over `recover` holds the symlink `takeover` inside the lock (created atomically, with an uptime stamp refreshed after each upload). A takeover older than 300 s with no live run is replaced by the next `recover`, so a lost connection cannot strand the lock. For a recover with an existing marker the runner skips the `/data` checks (the old marker stands). The runner writes its result before it releases the lock.
+  - Before it changes anything the runner checks that `cstfw` runs (no arguments: rc 2 and `usage:`), that `/data` is mounted read-write, and writes the persistent marker `/data/wallview/cstfw-failed` and reads it back; if any of this fails it stops with rc 2 and releases the lock. Then it pauses the agent, only pids whose `comm` is `wallview-agent` (SIGSTOP, so a reboot from Home Assistant cannot hit the flash; the hardware watchdog is fed by the BusyBox daemon, not the agent) and unbinds the driver.
+  - Success needs rc 0 and the line `cstfw: done and verified` in the log; rc 0 without it counts as failed (rc 6). On success, or on 2/3/5 without an earlier failure, it removes the marker, binds the driver (if it was bound), resumes the agent and releases the lock. Otherwise the marker stays, the driver unbound, the agent paused and the lock held by the runner; only `recover` acts then, taking over a runner-held lock whenever no run is live (marker or not).
+  - After a reboot the lock and the pauses are gone and the kernel binds the driver again, but the marker stays: `recover` works the same through the normal lock and unbinds the driver itself. Do not use touch in between.
 - `cstimg.py show|set`: shows the suspected front-end fields of an image (with sha256 and whether it is the vendor image), or writes a new file (never the input or an existing file) with changed bytes of the main configuration table `0x1604–0x16cb` and a recomputed checksum; version unchanged.
 
-Way back by hand, if the tools themselves get stuck (on the panel): `cat /data/wallview/cstfw-failed`; make sure no `cstfw` runs (`pidof cstfw`); then `rm -rf /tmp/cstfw.run`; `kill -CONT $(cat /tmp/cstfw.agent-pids)`; `rm -rf /tmp/wallview-panel.lock`; and run `recover` from the Mac. Only bind the driver (`echo 1-005a > /sys/bus/i2c/drivers/Hynitron-TS/bind`) after a successful flash or recover; then remove the marker.
+Way back by hand, if the tools themselves get stuck (on the panel):
+1. `cat /data/wallview/cstfw-failed /tmp/cstfw.run/log`; check that the runner is gone (`kill -0 $(cat /tmp/cstfw.run/pid)` fails) and no `cstfw` runs (`pidof cstfw`). A `cstfw` still running after 5 minutes is hung (five attempts on a stuck bus take about 3 minutes): `kill -9 $(pidof cstfw)`.
+2. If the marker exists, or anything was written: leave the agent paused, the driver unbound and the lock as they are, make sure the marker exists (`echo manual > /data/wallview/cstfw-failed`), and run `recover` from the Mac (it always needs the Mac, the vendor image and the Lima VM). `recover` takes over a runner-held lock itself, also one with a `takeover` link older than 5 minutes; do not remove that link by hand while a `recover` may run.
+3. Only if nothing was written (rc 2, 3 or 5, or no rc at all, and no marker): `rm -rf /tmp/cstfw.run`, `kill -CONT $(cat /tmp/cstfw.agent-pids)`, `rm -f /tmp/cstfw.agent-pids`, `echo 1-005a > /sys/bus/i2c/drivers/Hynitron-TS/bind`, and remove the lock only if its owner is `touch controller flash (cstfw-run)`.
 
 What must be true before `flash` is ever run (the revert guarantee):
 
 1. `boot-check` passed on this panel with the same `cstfw` build, and `info` after it shows the seven expected rows.
 2. The vendor image exists in two places and its sha256 (`0496946b…bbf1`) is checked right before flashing.
-3. `0xD20C` is served from the flash trailer, not computed, so it does not prove the content. Only a boot-loader checksum (`boot-checksum`, if it gives one) or the vendor kernel's behaviour supports it.
-4. The page-select encoding (`A0 14 <lo> <hi>`) and the data registers `0xA018 + 4k` (up to `0xA214`) have been checked against the vendor disassembly by a second reader.
-5. The vendor Android `boot.img` has been booted once on the development panel (plan (a) step 6 fallback).
-6. Stable power, nothing else using the panel. The first flash is the unmodified vendor image. Jakub accepts that recovery is inferred until that first re-flash has succeeded.
+3. `0xD20C` is served from the flash trailer, not computed, so it does not prove the content. Only a boot-loader checksum (`boot-checksum`, if it gives one) or the vendor kernel's behaviour supports it. Done 2026-11-27 on the development panel: in boot mode, before any programming, `0xA000 = 01` and `0xA008` = 0x99630e41, the vendor image's checksum, so the boot loader reports a checksum of the flash content without being programmed first.
+4. The page-select encoding (`A0 14 <lo> <hi>`) and the data registers `0xA018 + 4k` (up to `0xA214`) have been checked against the vendor disassembly by a second reader. Done 2026-11-27: an independent reading of the vendor `Image` (routine at file offset 0x6342f0) matches the table and `cstfw.c` byte for byte, and the image embedded in that kernel has the vendor image's sha256. The vendor I²C helpers retry every transaction up to 5 times; `cstfw` does the same during programming. The vendor ignores the results of `A0 06 00` and `A0 03 00`; `cstfw` logs them and continues, the `0xA000`/`0xA008` check decides. Worst case on a stuck bus is now about 3 minutes. What `0xA000`/`0xA008` return before programming (`boot-checksum`) cannot be derived from the vendor code.
+5. The vendor Android `boot.img` has been booted once on the development panel (plan (a) step 6 fallback). Not done: booting Android restores the stock `recovery`, and coming back needs Loader mode over USB, which Jakub keeps as the last resort (2026-11-27). The way back is therefore, in order: `cstfw` retries and `recover`; `wallview-boot android` and a reboot, so the vendor driver re-flashes at probe; USB Loader mode to return to WallView; a replacement controller.
+6. Stable power, nothing else using the panel. The first flash is the unmodified vendor image. Jakub accepts that recovery is inferred until that first re-flash has succeeded. Done 2026-11-27: two no-op re-flashes of the vendor image on the development panel, both rc 0 on the first attempt, boot-loader checksum 0x99630e41 and the same seven info rows after each.
 
 Typical session, each step with the owner's approval:
 
@@ -164,7 +171,7 @@ Evidence that it lives outside the rewritable flash:
 1. The image covers the whole flash from the vector table at `0x0000` to `0x1DFF`, and the updater rewrites all 15 pages starting with page 0. No page is kept, so the code that receives the pages cannot be in them.
 2. The application calls code that is not in the image: direct calls to `0x8690`, `0x88ce`, `0x8a28`, `0x8f4a`, `0x95a4`, `0x98ac`, `0x9ad0`, `0x9cb4`, `0xd516` and 22 entries of a jump table at `0xDF20–0xDFE8`. A separate code memory of at least 24 KB exists and is never updated.
 3. The application's I²C handler (`0x0d58`) decodes only `0xD000–0xD050`, `0xD100–0xD120`, `0xD1F0–0xD213`, `0xD220–0xD240`. Nothing in the flash handles `0xA0xx`.
-4. Boot mode is entered by reset + `A0 01 AA` only, before the application runs; the application takes no part. The vendor driver retries the complete procedure from page 0 after any failure, which only makes sense if entry does not depend on valid flash content.
+4. Boot mode is entered by reset + `A0 01 AA` only, before the application runs; the application takes no part. The vendor driver retries the complete procedure from page 0 after a failed boot entry, page write or acknowledge, `A0 01 00` or `A0 06 EE` (not after a checksum failure, where it gives up), which only makes sense if entry does not depend on valid flash content.
 5. The checksum at `0xA008` is computed by the bootloader over the flash, not supplied by the host.
 
 Not known: how long after reset the boot code listens for `A0 01 AA` (the vendor driver first tries 10–20 ms after releasing reset and keeps trying for about 200 ms; mainline CST3xx uses 7–11 ms), whether the boot code refuses to start an application with a bad checksum, and whether the "ROM" is mask ROM or protected flash. None of these change the recovery argument, but until a re-flash has been done once on this hardware, recovery is inferred, not demonstrated.
@@ -306,8 +313,24 @@ Worst case: the boot code is not what the evidence says and the chip stays dead.
 Only after (a) has succeeded at least twice.
 
 1. Change one field per image, starting with the front-end fields in the table above (for example `cfg[0x66]` 20 → 10, then `cfg[0xb4]` 339 → 170), recompute the checksum word, keep version `0x03000001`. Keep every image and its measurements under `local/firmware/hynitron/`.
-2. Flash with the proven flasher, then measure: INT period and jitter with `touchprobe` (finger circling), rest jitter with a finger held still, five-finger test, palm, edge taps, behaviour with the relay board switching and with USB power versus mains.
-3. Revert to the original image between experiments whenever the result is unclear.
+2. Before flashing a try image: stop the kiosk browser or show a harmless page (ghost touches must not reach Home Assistant), check with `cstimg.py show` and `cmp -l` that only the changed byte and the checksum word differ, post `Start` in issue #7 with the try image's checksum. Measure each image with `tools/perf/panel-touchprobe.sh root@PANEL <seconds> <name>` (lock, marker check, unbind, trapped re-bind; output in `local/touchprobe/`): finger circling, finger still (position spread) and no finger (reads with touch are ghosts). Revert to the vendor image in the same sitting and finish with `info` and `boot-checksum`. Keep a count of flash cycles in `local/`.
+3. Flash with the proven flasher, then measure: INT period and jitter with `touchprobe` (finger circling), rest jitter with a finger held still, five-finger test, palm, edge taps, behaviour with the relay board switching and with USB power versus mains.
+4. Revert to the original image between experiments whenever the result is unclear.
+
+Results:
+
+| 2026-11-27, dev panel | vendor | `cfg[0x66]` 20 → 10 (checksum 0x99590e41) |
+|---|---|---|
+| no finger, 10 s: INT / ghost reads | 0 / 0 | 0 / 0 |
+| finger still: INT interval median / p90 / max | 22.5 / 39.4 / 58 ms | 16.4 / 23.3 / 43 ms |
+| finger still: position spread | 1 px | 1–2 px |
+| circling: INT interval median / p90 / max | 14.8 / 39.6 / 118 ms (15 s) | 19.4 / 45.4 / 100 ms (10 s) |
+| circling: new position median / p90 | 18.5 / 48.3 ms | 20.5 / 51.1 ms |
+| circling: reads without touch | 7 of 760 | 2 of 226 |
+
+`cfg[0x66]` = 10 speeds up reporting with a finger at rest but not while it moves, and the slow tail (p90 40–50 ms) stays. It is not the active scan period. The circling capture on the try image was short and its speed not controlled, so that row is weak. Both flashes rc 0 on the first attempt; the vendor image is back and verified. Next candidates: `cfg[0xb4]` (u16 339) and the fields at 0x1668/0x1669.
+
+Measuring with a person at the panel works best as one capture with a fixed script read out beforehand (for example 40 s: 0–10 s no touch, 10–20 s finger still, 20–40 s circling), started by the person and split by time afterwards. Step-by-step prompts over chat arrive late and mix up the captures.
 
 Risks, highest first:
 

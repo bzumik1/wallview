@@ -86,6 +86,36 @@ w3(uint8_t a, uint8_t b, uint8_t c)
 }
 
 static int
+wr5(const uint8_t *buf, int len)
+{
+    for (int i = 0; i < 5; i++) {
+        if (wr(buf, len) == 0)
+            return 0;
+        sleep_ms(2);
+    }
+    return -1;
+}
+
+static int
+rd5(uint16_t reg, uint8_t *buf, int len)
+{
+    for (int i = 0; i < 5; i++) {
+        if (rd(reg, buf, len) == 0)
+            return 0;
+        sleep_ms(2);
+    }
+    return -1;
+}
+
+static int
+w3r(uint8_t a, uint8_t b, uint8_t c)
+{
+    uint8_t buf[3] = { a, b, c };
+
+    return wr5(buf, 3);
+}
+
+static int
 reset_pulse(int wait_ms)
 {
     struct gpiohandle_data v = { 0 };
@@ -272,28 +302,28 @@ flash_once(const uint8_t *img)
         fprintf(stderr, "cstfw: boot mode not entered, nothing erased in this attempt\n");
         return -2;
     }
-    if (w3(0xa0, 0x06, 0x00))
-        return -1;
+    if (w3r(0xa0, 0x06, 0x00))
+        printf("A0 06 00 not acknowledged (continuing, as the vendor driver does)\n");
     for (int page = 0; page < IMAGE_SIZE / PAGE_SIZE; page++) {
         int offset = page * PAGE_SIZE;
         uint8_t sel[4] = { 0xa0, 0x14, offset & 0xff, offset >> 8 };
 
-        if (wr(sel, 4))
+        if (wr5(sel, 4))
             return -1;
         for (int k = 0; k < PAGE_SIZE / 4; k++) {
             uint16_t reg = 0xa018 + 4 * k;
             uint8_t data[6] = { reg >> 8, reg & 0xff };
 
             memcpy(data + 2, img + offset + 4 * k, 4);
-            if (wr(data, 6))
+            if (wr5(data, 6))
                 return -1;
         }
-        if (w3(0xa0, 0x04, 0xee))
+        if (w3r(0xa0, 0x04, 0xee))
             return -1;
         sleep_ms(600);
         ok = 0;
         for (int i = 0; i < 10 && !ok; i++) {
-            ok = rd(0xa005, &v, 1) == 0 && v == 0x55;
+            ok = rd5(0xa005, &v, 1) == 0 && v == 0x55;
             if (!ok)
                 sleep_ms(100);
         }
@@ -304,19 +334,21 @@ flash_once(const uint8_t *img)
         printf("page %2d/%d written\n", page + 1, IMAGE_SIZE / PAGE_SIZE);
         fflush(stdout);
     }
-    if (w3(0xa0, 0x01, 0x00) || w3(0xa0, 0x03, 0x00))
+    if (w3r(0xa0, 0x01, 0x00))
         return -1;
+    if (w3r(0xa0, 0x03, 0x00))
+        printf("A0 03 00 not acknowledged (continuing, as the vendor driver does)\n");
     sleep_ms(10);
     ok = 0;
     for (int i = 0; i < 10 && !ok; i++) {
-        ok = rd(0xa000, &v, 1) == 0 && v == 0x01;
+        ok = rd5(0xa000, &v, 1) == 0 && v == 0x01;
         sleep_ms(4);
     }
     if (!ok) {
         fprintf(stderr, "cstfw: no checksum from the boot loader (0xA000 = %02x)\n", v);
         return -1;
     }
-    if (rd(0xa008, b, 4)) {
+    if (rd5(0xa008, b, 4)) {
         fprintf(stderr, "cstfw: checksum read failed\n");
         return -1;
     }
@@ -324,7 +356,7 @@ flash_once(const uint8_t *img)
         fprintf(stderr, "cstfw: checksum 0x%08x, image 0x%08x\n", le32(b), le32(img + 0x1dfc));
         return -1;
     }
-    if (w3(0xa0, 0x06, 0xee))
+    if (w3r(0xa0, 0x06, 0xee))
         fprintf(stderr, "cstfw: A0 06 EE not acknowledged (continuing with reset)\n");
     sleep_ms(100);
     if (reset_pulse(30))
@@ -377,8 +409,10 @@ flash(const char *path, int recover, uint32_t current)
 
     struct sched_param param = { .sched_priority = 50 };
 
-    sched_setscheduler(0, SCHED_FIFO, &param);
-    mlockall(MCL_CURRENT | MCL_FUTURE);
+    if (sched_setscheduler(0, SCHED_FIFO, &param))
+        printf("SCHED_FIFO not set: %s\n", strerror(errno));
+    if (mlockall(MCL_CURRENT | MCL_FUTURE))
+        printf("mlockall failed: %s\n", strerror(errno));
 
     int erased = 0;
 
@@ -397,8 +431,10 @@ flash(const char *path, int recover, uint32_t current)
                     break;
                 sleep_ms(waits[i]);
                 if (info_read(chip, 1) == 0 && memcmp(chip, ident, sizeof(ident)) == 0 &&
-                    le32(chip + 24) == le32(img + 0x1dfc))
+                    le32(chip + 24) == le32(img + 0x1dfc)) {
+                    printf("cstfw: done and verified, checksum 0x%08x\n", le32(chip + 24));
                     return 0;
+                }
             }
             fprintf(stderr, "cstfw: the new application does not answer as expected\n");
             return 4;
