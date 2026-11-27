@@ -44,6 +44,10 @@ else
 	rm -f "$TARGET/usr/bin/wallview-browser"
 fi
 
+"$HOST_DIR/bin/$CROSS-gcc" -O2 -s -Wall -Wextra -Werror \
+	-o "$TARGET/usr/bin/wallview-touch" \
+	"$BR2_EXTERNAL_WALLVIEW_PATH/board/wallview/touch/wallview-touch.c"
+
 CARGO=$HOME/.cargo/bin/cargo
 env -i HOME="$HOME" PATH=/usr/bin:/bin CARGO_TARGET_DIR="$HOME/build/agent-target" \
 	"$CARGO" build --release --locked --manifest-path "$WALLVIEW/agent/Cargo.toml"

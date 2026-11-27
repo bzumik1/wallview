@@ -1,0 +1,13 @@
+#!/bin/sh
+
+touch_loop() {
+	while [ "$(cat /data/wallview/touch-resampling 2>/dev/null)" != off ]; do
+		wallview-touch >> /tmp/wallview-touch.log 2>&1
+		sleep 2
+	done
+}
+
+case "$1" in
+start) touch_loop </dev/null >/dev/null 2>&1 & ;;
+stop) killall wallview-touch 2>/dev/null ;;
+esac
