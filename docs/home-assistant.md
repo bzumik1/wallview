@@ -47,7 +47,7 @@ The agent samples the proximity channel of the `stk3310` every 100 ms. The raw v
 
 - Presence turns on when the reading rises above the baseline by the rise that **Presence sensitivity** sets: 1000 counts at 1 %, 2 counts at 100 %, on a logarithmic scale (about 46 at the default 50 %; before, presence was a fixed raw value of 100 with a baseline of about 3).
 - It turns off once the reading has been below half of that rise for 1 s, so a quick wave is still seen by Home Assistant (the API loop sends states every 500 ms) and the state does not flicker at the edge.
-- To calibrate, watch the diagnostic **Proximity** sensor (raw value) with nothing in front and at the distance that should count; a person who stands still for long is not absorbed into the baseline, a slow drift is. Longer delays (turn the screen off after a minute without presence) belong in a Home Assistant automation.
+- To calibrate, watch the diagnostic **Proximity** sensor (raw value) with nothing in front and at the distance that should count; a slow drift is absorbed into the baseline, a person in front of the panel is not for the first 10 minutes; after 10 minutes of continuous presence the baseline starts to follow again, so an object left in front of the panel releases Presence. Longer delays (turn the screen off after a minute without presence) belong in a Home Assistant automation.
 
 ## Zigbee and Thread
 

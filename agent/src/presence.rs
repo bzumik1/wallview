@@ -1,5 +1,6 @@
 use std::fs::{self, File};
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,6 +14,8 @@ const LEAST_SENSITIVE_RISE: f64 = 1000.0;
 const RELEASE_FRACTION: f64 = 0.5;
 const BASELINE_FOLLOW: f64 = 0.01;
 pub const HOLD: Duration = Duration::from_secs(1);
+pub const STUCK: Duration = Duration::from_secs(600);
+const FAILURES_BEFORE_RESET: u32 = 10;
 pub const MINIMUM_SENSITIVITY: u32 = 1;
 pub const MAXIMUM_SENSITIVITY: u32 = 100;
 pub const DEFAULT_SENSITIVITY: u32 = 50;
@@ -36,6 +39,7 @@ fn parse_sensitivity(text: &str) -> u32 {
 pub struct Detector {
     baseline: Option<f64>,
     near: bool,
+    near_since: Option<Instant>,
     last_near: Option<Instant>,
 }
 
@@ -44,12 +48,17 @@ impl Detector {
         let baseline = self.baseline.map_or(raw, |baseline| baseline.min(raw));
         let signal = raw - baseline;
         if signal >= rise || (self.near && signal >= rise * RELEASE_FRACTION) {
+            if !self.near {
+                self.near_since = Some(now);
+            }
             self.near = true;
             self.last_near = Some(now);
         } else if self.near && self.last_near.is_none_or(|last| now.duration_since(last) >= HOLD) {
             self.near = false;
+            self.near_since = None;
         }
-        self.baseline = Some(if self.near { baseline } else { baseline + (raw - baseline) * BASELINE_FOLLOW });
+        let stuck = self.near_since.is_some_and(|since| now.duration_since(since) >= STUCK);
+        self.baseline = Some(if self.near && !stuck { baseline } else { baseline + (raw - baseline) * BASELINE_FOLLOW });
         self.near
     }
 }
@@ -62,6 +71,7 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     store: Mutex<()>,
+    changes: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -76,12 +86,17 @@ impl Presence {
             shared: Arc::new(Shared {
                 state: Mutex::new(State { sensitivity, near: None }),
                 store: Mutex::new(()),
+                changes: AtomicU64::new(0),
             }),
         }
     }
 
     pub fn sensitivity(&self) -> u32 {
         self.shared.state.lock().unwrap().sensitivity
+    }
+
+    pub fn changes(&self) -> u64 {
+        self.shared.changes.load(Ordering::SeqCst)
     }
 
     pub fn near(&self) -> Option<bool> {
@@ -101,10 +116,14 @@ impl Presence {
                 file.sync_all()
             })
             .and_then(|_| fs::rename(&temporary, SETTINGS_FILE));
-        if let Err(error) = stored {
-            eprintln!("wallview-agent: presence: cannot store the sensitivity: {error}");
+        match stored {
+            Ok(()) => self.shared.state.lock().unwrap().sensitivity = sensitivity,
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                eprintln!("wallview-agent: presence: cannot store the sensitivity: {error}");
+            }
         }
-        self.shared.state.lock().unwrap().sensitivity = sensitivity;
+        self.shared.changes.fetch_add(1, Ordering::SeqCst);
     }
 
     fn set_near(&self, near: Option<bool>) {
@@ -115,12 +134,20 @@ impl Presence {
 pub fn run(device: Device) {
     let presence = device.presence.clone();
     let mut detector = Detector::default();
+    let mut failures = 0;
     loop {
-        let near = device.proximity().map(|raw| detector.update(raw, rise_for(presence.sensitivity()), Instant::now()));
-        if near.is_none() {
-            detector = Detector::default();
+        match device.proximity() {
+            Some(raw) => {
+                failures = 0;
+                presence.set_near(Some(detector.update(raw, rise_for(presence.sensitivity()), Instant::now())));
+            }
+            None if failures + 1 >= FAILURES_BEFORE_RESET => {
+                failures = FAILURES_BEFORE_RESET;
+                detector = Detector::default();
+                presence.set_near(None);
+            }
+            None => failures += 1,
         }
-        presence.set_near(near);
         thread::sleep(TICK);
     }
 }
@@ -188,6 +215,17 @@ mod tests {
         let start = Instant::now();
         let near = feed(&mut detector, start, &[(0, 3.0), (100, 30.0), (1500, 15.0), (3000, 14.0), (4500, 12.0)], 20.0);
         assert_eq!(near, [false, true, true, true, false]);
+    }
+
+    #[test]
+    fn a_lasting_step_releases_after_the_stuck_time() {
+        let mut detector = Detector::default();
+        let start = Instant::now();
+        let ticks = (STUCK.as_millis() as u64 / 100) + 1200;
+        let object: Vec<(u64, f64)> = std::iter::once((0, 3.0)).chain((1..ticks).map(|tick| (tick * 100, 60.0))).collect();
+        let near = feed(&mut detector, start, &object, 20.0);
+        assert!(near[1..(STUCK.as_millis() as usize / 100)].iter().all(|near| *near));
+        assert!(!near.last().unwrap());
     }
 
     #[test]

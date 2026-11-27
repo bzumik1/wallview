@@ -178,6 +178,7 @@ fn handle_client(
     let mut sign_in_requests = device.sign_in_requests();
     let mut last_presence = None;
     let mut radio_changes = device.radio.changes();
+    let mut presence_changes = device.presence.changes();
     let mut bluetooth_changes = device.bluetooth.changes();
     let proxy_at_connect = device.bluetooth.proxy_enabled();
     let mut last_sensors = Instant::now();
@@ -237,6 +238,11 @@ fn handle_client(
             for (message_type, data) in entities::radio_states(device) {
                 sender.send(message_type, &data)?;
             }
+        }
+        if device.presence.changes() != presence_changes {
+            presence_changes = device.presence.changes();
+            let (message_type, data) = entities::presence_sensitivity_state(device);
+            sender.send(message_type, &data)?;
         }
         if let Some((near, state)) = entities::presence_state(device) {
             if last_presence != Some(near) {
