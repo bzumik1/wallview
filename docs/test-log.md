@@ -133,3 +133,21 @@ While the Buildroot WebKit build was still running (it needs about 3 GB per comp
 
 - Panel assembled and powered from mains: autoboot into WallView (primary slot) without any button. Reboot to SSH takes 34 s: about 19 s vendor U-Boot plus loader, 15 s WallView kernel (Wi-Fi associated at 10.9 s). The loader stage is the main target for boot time optimisation.
 - Touch works with the mainline `hynitron_cstxxx` driver and our CST226SE patch: 2135 interrupts and 56 touch-downs in 30 s, multi-touch events on `event0`. Corner taps: top left X≈8 Y≈36, bottom right X≈469 Y≈472, so no axis swap or inversion is needed. *Correction (same evening, commit 36525e1): these two diagonal corners cannot reveal a swap; top right 9,455 and bottom left 472,37 showed X and Y swapped, so the device tree now has `touchscreen-swapped-x-y`. Nothing else in the input path (wallview-touch, WPE, libinput) swaps again.* (Earlier "no touch" results were simply captures while nobody touched the screen.)
+
+## 2026-11-27 – panel 2: Zigbee radio bridge
+
+Agent from the PR #9 image (radio bridge from PR #2, without the Bluetooth proxy), only the Radio mode select changed, under the panel lock, no reboot.
+
+- Off (default): port 6638 closed, `ttyS5` not open.
+- ESPHome API lists `select radio_mode` (Off, Zigbee coordinator) and `binary_sensor radio_client_connected`. Zigbee coordinator: `/data/wallview/radio-mode` written, port 6638 listening, `ttyS5` held by the agent, mDNS `_zigbee-coordinator._tcp` record on port 6638 with `radio_type=ezsp`, `serial_number` and `name`.
+- ASH reset through the bridge answered with `11 1a c1 02 0b 0a 52 7e` (XON + RSTACK). EZSP `version` only (no network init, no configuration writes): **EZSP protocol 8, stack type 2, stack version 0x6a10 = EmberZNet 6.10.1**.
+- A second TCP client during a session was refused (reset after 0.42 s); the first kept working; a new client after it left was answered within 0.43 s. The connected sensor followed False → True → False.
+- `ttyS5` counters: no framing, overrun or parity errors. Agent CPU 0 %.
+- Off again: port closed, `ttyS5` closed, the `_zigbee-coordinator` record gone, `_esphomelib` still advertised.
+- Restored: mode file removed (it did not exist before), API key unchanged, same agent PID throughout.
+
+EmberZNet 6.10.1 works with ZHA (bellows supports EZSP 8), but Zigbee2MQTT's `ember` adapter needs EZSP 13 or newer (EmberZNet 7.4+), so Zigbee2MQTT only works with the deprecated `ezsp` adapter until the radio gets newer firmware. Not yet added to a Home Assistant ZHA instance.
+
+### Gecko bootloader entry (no write)
+
+Radio mode Zigbee coordinator, `universal-silabs-flasher` 1.3.0 on the Mac over the TCP bridge, under the panel lock, no reboot. EZSP `launchStandaloneBootloader` (mode 1) returned SUCCESS; the menu at 115200 baud read **Gecko Bootloader v1.12.00** (1. upload gbl, 2. run, 3. ebl info). Only `ebl info` and `run` were sent, never `upload`. The radio answered `run` with XON + RSTACK and EZSP reported EmberZNet 6.10.1.0 build 216 before and after. So the radio can be put into its bootloader from software, without a reset GPIO. Restored: mode Off, mode file removed, same agent PID.
