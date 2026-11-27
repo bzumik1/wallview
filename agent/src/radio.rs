@@ -1,16 +1,3 @@
-//! Onboard Zigbee/Thread radio (EFR32MG21 on UART5).
-//!
-//! The radio runs in one mode at a time, chosen with the "Radio mode" select in Home Assistant
-//! and stored in `/data/wallview/radio-mode`. Today the only active mode is the Zigbee
-//! coordinator: the factory EZSP firmware is shared over TCP (port 6638, like ser2net) and
-//! advertised as `_zigbee-coordinator._tcp`, so ZHA offers it automatically and Zigbee2MQTT can
-//! use `tcp://<panel>:6638`. Router and Thread modes need other firmware and come later.
-//!
-//! The bridge serves one Zigbee host at a time and refuses others while it is connected, so a
-//! port scan or a second host cannot cut off the running one (a host that takes over with a
-//! different network configuration would make the radio leave the Zigbee network). Dead hosts
-//! are detected with TCP keepalive. Option labels are wire values: only ever append new ones.
-
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -24,7 +11,6 @@ use std::time::{Duration, Instant};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 
 const SERIAL: &str = "/dev/ttyS5";
-/// Overrides the UART path, for testing the bridge against a pseudo terminal.
 const SERIAL_ENV: &str = "WALLVIEW_RADIO_SERIAL";
 const MODE_FILE: &str = "/data/wallview/radio-mode";
 pub const BRIDGE_PORT: u16 = 6638;
@@ -92,8 +78,6 @@ impl Radio {
         *self.mode.lock().unwrap()
     }
 
-    /// Stores the mode (temporary file + rename) and applies it only if that worked, so the
-    /// panel never runs a mode it would forget on the next boot.
     pub fn set_mode(&self, mode: Mode) {
         let _store = self.store.lock().unwrap();
         if self.mode() == mode {
@@ -115,12 +99,10 @@ impl Radio {
         self.changes.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// True while a host (ZHA, Zigbee2MQTT) is connected to the radio.
     pub fn client_connected(&self) -> bool {
         self.client.load(Ordering::SeqCst)
     }
 
-    /// Increases on every change of mode or client, so API connections know when to send states.
     pub fn changes(&self) -> u64 {
         self.changes.load(Ordering::SeqCst)
     }
@@ -132,8 +114,6 @@ impl Radio {
     }
 }
 
-/// Runs the radio for the lifetime of the agent, following the selected mode. A failing start
-/// (UART missing or busy, port taken) is retried with a growing delay and logged once.
 pub fn run(radio: Radio, node_name: String, friendly_name: String, serial_number: String) {
     let mut retry = RETRY_FIRST;
     let mut last_error = String::new();
@@ -200,12 +180,6 @@ fn check(result: libc::c_int) -> io::Result<()> {
     }
 }
 
-/// Opens the UART with `TIOCEXCL` (no further non-root opener while the bridge runs; root is not
-/// stopped, so it guards against accidents only) and raw at 115200 8N1 without any flow control.
-/// The factory EZSP firmware sends XON/XOFF; ASH escapes 0x11 and 0x13 inside frames, and the
-/// bytes are passed through to the host, which drops them. The kernel does not act on them, so
-/// a lost XON can never stop transmission. Reads return after 0.2 s without data, so the copy
-/// loops can notice a mode change.
 fn open_serial() -> io::Result<File> {
     let path = std::env::var(SERIAL_ENV).unwrap_or_else(|_| SERIAL.to_string());
     let file = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK).open(&path)?;
@@ -230,8 +204,6 @@ fn open_serial() -> io::Result<File> {
     Ok(file)
 }
 
-/// Discards bytes left in both directions by an earlier session or sent by the radio while no
-/// host was connected.
 fn flush_serial(serial: &File) {
     unsafe {
         libc::tcflush(serial.as_raw_fd(), libc::TCIOFLUSH);
@@ -253,13 +225,9 @@ fn set_keepalive(stream: &TcpStream) -> io::Result<()> {
     set(libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, KEEPALIVE_IDLE_S)?;
     set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, KEEPALIVE_INTERVAL_S)?;
     set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, KEEPALIVE_COUNT)?;
-    // Keepalive probes are not sent while data is unacknowledged, and the radio talks all the
-    // time: without this a vanished host would hold the bridge for many minutes.
     set(libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, USER_TIMEOUT_MS)
 }
 
-/// Serves the UART to one TCP host at a time while the mode is Zigbee coordinator. Errors of a
-/// single connection are logged and do not stop the bridge.
 fn bridge(radio: &Radio, node_name: &str, friendly_name: &str, serial_number: &str) -> io::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", BRIDGE_PORT))?;
     listener.set_nonblocking(true)?;
@@ -324,7 +292,6 @@ impl Session {
         stream.set_read_timeout(Some(Duration::from_millis(200)))?;
         stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
         set_keepalive(&stream)?;
-        // Every clone before any thread starts, so a failure leaves no worker behind.
         let mut from_serial = serial.try_clone()?;
         let mut to_serial = serial.try_clone()?;
         let mut to_client = stream.try_clone()?;
@@ -387,7 +354,6 @@ impl Session {
     fn stop(self, serial: &File) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = self.stream.shutdown(Shutdown::Both);
-        // Drops queued output; without flow control a pending write finishes within ~0.1 s anyway.
         unsafe {
             libc::tcflush(serial.as_raw_fd(), libc::TCOFLUSH);
         }
