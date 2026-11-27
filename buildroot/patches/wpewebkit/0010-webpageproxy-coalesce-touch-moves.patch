@@ -1,0 +1,122 @@
+From: WallView
+Subject: [PATCH] WebPageProxy: coalesce touch moves while the page has not
+ answered the previous touch event
+
+Outside iOS every touch event is sent to the web process as it arrives.
+The NSPanel reports 120 touch moves per second, and a page whose
+touchmove handler takes longer than that interval builds up a queue on
+the main thread: on a Home Assistant view with a chart (about 100 ms per
+touchmove) the answer to a touch event came up to 2.1 s after the event
+was sent, so the page handled touch moves, painted tiles and applied
+state updates seconds after the finger had left, and every stale move
+cost the same main thread time as a current one.
+
+Keep at most one touch move back while an earlier touch event is
+unanswered, replace it with a newer one that has the same touch points
+in the same states, and send it when the answer arrives. Any other touch
+event sends the held move first, so the order of events and the last
+position before a touch end are unchanged. The page gets one touchmove
+per turn of its event loop with the newest position, which is what other
+engines deliver to a busy page. Gesture recognition in the UI process is
+not affected: it sees every event before this queue.
+
+WALLVIEW_WEBKIT_NO_TOUCH_COALESCING (any value) sends every touch move
+as before, for A/B measurements.
+
+Upstream-Status: Pending
+---
+--- a/Source/WebKit/UIProcess/WebPageProxyInternals.h
++++ b/Source/WebKit/UIProcess/WebPageProxyInternals.h
+@@ -421,6 +421,7 @@
+ 
+ #if ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+     Deque<QueuedTouchEvents> touchEventQueue;
++    std::optional<NativeWebTouchEvent> coalescedTouchMoveEvent;
+ #endif
+ 
+ #if ENABLE(WRITING_TOOLS)
+--- a/Source/WebKit/UIProcess/WebPageProxy.cpp
++++ b/Source/WebKit/UIProcess/WebPageProxy.cpp
+@@ -4675,6 +4675,23 @@
+ }
+ 
+ #elif ENABLE(TOUCH_EVENTS)
++static bool canCoalesceTouchMoveEvents(const WebTouchEvent& a, const WebTouchEvent& b)
++{
++    if (a.type() != WebEventType::TouchMove || b.type() != WebEventType::TouchMove || a.modifiers() != b.modifiers())
++        return false;
++
++    auto& pointsA = a.touchPoints();
++    auto& pointsB = b.touchPoints();
++    if (pointsA.size() != pointsB.size())
++        return false;
++
++    for (size_t i = 0; i < pointsA.size(); ++i) {
++        if (pointsA[i].id() != pointsB[i].id() || pointsA[i].state() != pointsB[i].state())
++            return false;
++    }
++    return true;
++}
++
+ void WebPageProxy::touchEventHandlingCompleted(IPC::Connection* connection, std::optional<WebEventType> eventType, bool handled)
+ {
+     MESSAGE_CHECK_BASE(!internals().touchEventQueue.isEmpty(), connection);
+@@ -4691,6 +4708,12 @@
+         bool isEventHandled = false;
+         pageClient->doneWithTouchEvent(queuedEvents.deferredTouchEvents.at(i), isEventHandled);
+     }
++
++    if (internals().touchEventQueue.isEmpty() && internals().coalescedTouchMoveEvent) {
++        NativeWebTouchEvent coalescedEvent = *internals().coalescedTouchMoveEvent;
++        internals().coalescedTouchMoveEvent.reset();
++        handleTouchEvent(nullptr, coalescedEvent);
++    }
+ }
+ 
+ void WebPageProxy::handleTouchEvent(IPC::Connection* connection, const NativeWebTouchEvent& event)
+@@ -4707,17 +4730,34 @@
+     // and animation on the page itself (kinetic scrolling, tap to zoom) etc, then
+     // we do not send any of the events to the page even if is has listeners.
+     if (!m_areActiveDOMObjectsAndAnimationsSuspended) {
+-        internals().touchEventQueue.append(event);
+-        protectedLegacyMainFrameProcess()->startResponsivenessTimer();
+-        sendWithAsyncReply(Messages::WebPage::TouchEvent(event), [this, protectedThis = Ref { *this }] (IPC::Connection* connection, std::optional<WebEventType> eventType, bool handled) {
+-            if (!m_pageClient)
+-                return;
+-            if (!eventType) {
+-                touchEventHandlingCompleted(connection, eventType, handled);
+-                return;
+-            }
+-            didReceiveEvent(connection, *eventType, handled, std::nullopt);
+-        });
++        static bool coalescesTouchMoves = !getenv("WALLVIEW_WEBKIT_NO_TOUCH_COALESCING");
++        auto& coalescedTouchMoveEvent = internals().coalescedTouchMoveEvent;
++        if (coalescesTouchMoves && !internals().touchEventQueue.isEmpty() && event.type() == WebEventType::TouchMove
++            && (!coalescedTouchMoveEvent || canCoalesceTouchMoveEvents(*coalescedTouchMoveEvent, event))) {
++            coalescedTouchMoveEvent.emplace(event);
++            return;
++        }
++
++        Vector<NativeWebTouchEvent, 2> eventsToSend;
++        if (coalescedTouchMoveEvent) {
++            eventsToSend.append(*coalescedTouchMoveEvent);
++            coalescedTouchMoveEvent.reset();
++        }
++        eventsToSend.append(event);
++
++        for (auto& eventToSend : eventsToSend) {
++            internals().touchEventQueue.append(eventToSend);
++            protectedLegacyMainFrameProcess()->startResponsivenessTimer();
++            sendWithAsyncReply(Messages::WebPage::TouchEvent(eventToSend), [this, protectedThis = Ref { *this }] (IPC::Connection* connection, std::optional<WebEventType> eventType, bool handled) {
++                if (!m_pageClient)
++                    return;
++                if (!eventType) {
++                    touchEventHandlingCompleted(connection, eventType, handled);
++                    return;
++                }
++                didReceiveEvent(connection, *eventType, handled, std::nullopt);
++            });
++        }
+     } else {
+         if (internals().touchEventQueue.isEmpty()) {
+             bool isEventHandled = false;
