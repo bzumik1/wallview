@@ -208,11 +208,62 @@ What the firmware shows:
 | `0xb4` (`0x16b8`) | `0x0153` (339) | `0x40001086` |
 | `0x67`, `0x68` (`0x166b`, `0x166c`) | `0x0a`, `0x0c` | `0x4000106e` |
 
-These are the prime suspects for drive pulse count, integration time and clock divider per TX line (13 lines; 14 ms per scan is about 1.1 ms per line). Which is which is **not known**; there is no public register description for this front end, and the Hynitron datasheets that might help (CST328, CST340, CST3240 on buydisplay.com) could not be fetched (HTTP 403). The rest of the table is consumed by the ROM.
+These are the prime suspects for drive pulse count, integration time and clock divider per TX line (13 lines; 14 ms per scan is about 1.1 ms per line). Which is which is **not known**; there is no public register description for this front end, and the sister-chip documents read on 2026-11-27 (see "Findings of 2026-11-27") do not describe the front end either. The rest of the table is consumed by the ROM.
 
 - No runtime switch: the vendor driver, mainline and the flash code contain no "report rate", "game mode" or "high rate" command. If one exists it is one of the undocumented `0xD100–0xD120` commands inside the ROM.
 
 What 120 Hz would take and cost: the frame has to drop from about 14–18 ms to 8.3 ms, so the scan must be roughly halved. In any mutual-capacitance front end that means fewer drive pulses or shorter integration per line, and signal-to-noise falls roughly with the square root of the integration time (halving it costs about 3 dB), on a panel whose firmware already spends effort on noise handling. Expected side effects: jitter at rest, false or lost touches near the mains-powered relay board, worse behaviour with a charger-like noise source. Thresholds in the same table would probably need retuning, with no documentation.
+
+## Findings of 2026-11-27
+
+### Configuration experiments on the development panel
+
+Each try image changed one value, was flashed with `panel-cstfw.sh flash` and reverted to the vendor image afterwards (all flashes rc 0 on attempt 1, except one revert that was refused with rc 3 and done with `recover`). INT falling-edge interval while circling, median:
+
+| Image | Median interval | Rate |
+|---|---|---|
+| vendor | 16–18 ms | 55–60 Hz |
+| `cfg[0x66]` 20 → 10 | 19.4 ms | 52 Hz |
+| `cfg[0xb4]` 339 → 170 | 26.4 ms | 38 Hz |
+| `cfg[0xb4]` 339 → 420 | about 25 ms (from `/proc/interrupts`, about 38–40 interrupts/s; no clean capture) | about 40 Hz |
+
+Every change made the controller slower. `cfg[0xb4]` slows it in both directions, which fits a drive frequency tuned to this sensor rather than a scan length. `cfg[0x66]` was only tried downwards. The `0xD204` row stayed `01 4b a8 00` on the 420 image, as on the vendor image.
+
+### Frame counter (`0xD040`)
+
+`0xD040` returns 6 bytes: a big-endian 32-bit counter that the flash main loop increments once per frame (`0x2f2`) and a check value, `b0 + b1 + b2 + b3 + 0xA5 == b4 << 8 | b5`. It is readable in normal mode without any command; `tools/perf/touchprobe` reads it with the `counter<ms>` option (`panel-touchprobe.sh ... counter200`). Measured on the vendor image (`tools/perf/captures/touch-counter-*.txt`):
+
+| State | Frames/s | Reports (INT)/s |
+|---|---|---|
+| no touch | 83 (12 ms), steady | 0 |
+| one finger resting | about 38 (26 ms) | about 38 |
+| slow circles | 48–53 | 42–44 |
+
+The scan without a finger is fast. A frame with a finger takes about twice as long, and the controller reports on almost every touched frame. The report rate is therefore limited by the work done in touched frames, not by the scan length that the front-end fields set. Candidates: the noise path in `0x068a`/`0x09fc` (a finger couples mains noise into the sensor) and the coordinate processing in ROM.
+
+### False lift-offs
+
+The controller itself reports lifts that did not happen while a finger moves: about 0.7 per second, median 57 ms, maximum 121 ms, no ghost touches at rest. In a raw capture almost every false lift is a single read with point count 1 and status 0, with the finger pressed again in the next read; a real lift comes one read (about 20 ms) after such a read.
+
+### Vendor Android driver
+
+Static reading of `cst2xx_ts_worker` and the rest of the vendor driver in the Android kernel:
+
+- A lift is reported on the first frame with no pressed point: no debounce, no timer, no count of empty frames. A point is pressed when `(b0 >> 1) & 7 == 3`.
+- The interrupt is requested rising-edge and oneshot. The ESD work runs every 1.2 s (300 jiffies at 250 Hz): `0xD109`, then up to five reads of `0xD040` 4 ms apart, reset when the check fails. While it holds the shared busy flag the worker skips a frame without reading or acknowledging it.
+- There is no factory test, raw-data or diff path: no sysfs, proc, ioctl or misc node. Commands sent: `0xD106` at probe and resume, `0xD105` at suspend, `0xD109` in the ESD work. `0xD101` and `0xD102` are never sent.
+
+### Flash I²C handler and debug modes
+
+- `0xD000–0xD050` read an 81-byte RAM buffer in any mode; other `0xD0xx` addresses return `0xA5`. A 13 × 8 node map (208 bytes) does not fit, so the flash code cannot return raw or difference data. What `0xD101`, `0xD102` and the other `0xD1xx` commands do is in ROM.
+- `0xD1F0–0xD213` and `0xD220–0xD240` are served from the flash trailer in any mode; no info-mode command is needed to read them.
+- Data bytes written after `0xD0xx` go to RAM (how `0xD000 0xAB` acknowledges), after `0xD1xx` to RAM byte `0x200000E1`, but after `0xD1F0` or `0xD220` to a flash address. Never write data to those two.
+
+### Sister-chip documents
+
+- CST3240 Application Manual: same protocol (`0xD000` 7-byte reads, `0xD000 0xAB` acknowledge, status `0x06` pressed and `0x00` released, `0xD101` info mode, `0xD109` normal mode, info rows `0xD1F4–0xD20C`, same boot loader sequence). The chip has "noise listening" and "frequency hopping". Nothing on report rate, front-end parameters or debug data modes.
+- CST340 datasheet V2.3: typical refresh rate 100 Hz; dynamic mode while touched, a slower monitor mode after a timeout without touch; TX drive up to 350 kHz and about 10 V. Its register map (`0x814E…`) is a different protocol from ours. Nothing on how to change the rate.
+- CST226SE datasheet V1.01 exists (Chinese, on Scribd) but only its title page is public. A third-party Hynitron driver guide lists `0xD1` commands `01` debug info, `02` factory test, `03` gesture, `09` normal, `0A` sleep, `0B` software reset (unverified).
 
 ## Live chip read
 
