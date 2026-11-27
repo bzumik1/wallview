@@ -100,7 +100,12 @@ impl Radio {
             return;
         }
         let temporary = format!("{MODE_FILE}.new");
-        let stored = fs::write(&temporary, format!("{}\n", mode.id())).and_then(|_| fs::rename(&temporary, MODE_FILE));
+        let stored = File::create(&temporary)
+            .and_then(|mut file| {
+                file.write_all(format!("{}\n", mode.id()).as_bytes())?;
+                file.sync_all()
+            })
+            .and_then(|_| fs::rename(&temporary, MODE_FILE));
         if let Err(error) = stored {
             eprintln!("wallview-agent: radio: cannot store mode, keeping {}: {error}", self.mode().label());
             self.changes.fetch_add(1, Ordering::SeqCst);
@@ -382,7 +387,7 @@ impl Session {
     fn stop(self, serial: &File) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = self.stream.shutdown(Shutdown::Both);
-        // Unblocks a serial write in progress, so joining cannot hang.
+        // Drops queued output; without flow control a pending write finishes within ~0.1 s anyway.
         unsafe {
             libc::tcflush(serial.as_raw_fd(), libc::TCOFLUSH);
         }
