@@ -707,7 +707,7 @@ done:
 
 int main(int argc, char **argv)
 {
-	int fps = 30;
+	int fps = 60;
 	struct sigaction handoff = { .sa_handler = on_handoff };
 	struct sigaction quit = { .sa_handler = on_quit };
 

@@ -26,7 +26,7 @@ Rejected earlier concept (frame with a wave), kept for history only:
 
 Static logo from U-Boot and the kernel, then an animated logo in Cog, then a crossfade to the dashboard (see the plan, phase 4).
 
-Animation (chosen 2026-11-27, "breathing"): the logo stands still while a blurred copy of it and a wide blue halo behind it breathe in and out (opacity 0.1 to 0.9, period 3.2 s), and the bands slowly cross-fade into the alternative palette and back (opacity up to 0.7, period 6.4 s). Only opacity changes, so every layer is painted once and the compositor only blends. The frames are locked to 30 fps: each keyframe interval is 0.1 s (breathing) or 0.2 s (colours) with `steps(3)` or `steps(6)`, so a value changes exactly every 33.3 ms, every second display refresh at 60 Hz; 60 fps would be `steps(6)` and `steps(12)`.
+Animation (chosen 2026-11-27, "breathing"): the logo stands still while a blurred copy of it and a wide blue halo behind it breathe in and out (opacity 0.1 to 0.9, period 3.2 s), and the bands slowly cross-fade into the alternative palette and back (opacity up to 0.7, period 6.4 s). Only opacity changes, so every layer is painted once and the compositor only blends. The frames are locked to 60 fps (Jakub, 2026-11-27): each keyframe interval is 0.1 s (breathing) or 0.2 s (colours) with `steps(6)` or `steps(12)`, so a value changes exactly every 16.7 ms, once per display refresh at 60 Hz; 30 fps would be `steps(3)` and `steps(6)`.
 
 ![Boot screen](boot-screen.png)
 
