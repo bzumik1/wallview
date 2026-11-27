@@ -34,8 +34,24 @@ The panel identifies itself honestly: manufacturer "WallView", model "Sonoff NSP
 | Sign in again | button, config | signs the kiosk in again: with the WallView integration a new automatic sign-in, otherwise the sign-in screen with the keyboard |
 | `esphome.wallview_xxxxxx_pair` | action (`secret`) | used by the WallView integration, starts the automatic sign-in |
 | Dashboard URL | text, config | `/data/wallview/url`, the kiosk restarts with the new URL |
+| Radio mode | select, config | `/data/wallview/radio-mode`: Off (default) or Zigbee coordinator, see [Zigbee and Thread](#zigbee-and-thread) |
+| Zigbee host connected | binary sensor (connectivity), diagnostic | a Zigbee host (ZHA, Zigbee2MQTT) is connected to the radio bridge |
 
 Presence changes are sent immediately, sensors every 15 s, commands answer with the new state.
+
+## Zigbee and Thread
+
+The onboard EFR32MG21 (SM-044, UART5, `/dev/ttyS5`) runs one mode at a time, chosen with the **Radio mode** select on the panel's ESPHome device. The radio itself is always used by an integration in Home Assistant; the select only decides what the panel offers.
+
+| Mode | Radio firmware | Panel | Home Assistant |
+|---|---|---|---|
+| Off | unchanged | UART closed | – |
+| Zigbee coordinator | factory EZSP NCP (115200, software flow control) | raw TCP bridge on port 6638, mDNS `_zigbee-coordinator._tcp` | ZHA offers "WallView xxxx" automatically (`socket://<panel>:6638`, radio type EZSP); Zigbee2MQTT: `port: tcp://<panel>:6638`, `adapter: ember` (`ezsp` if the factory firmware is older than EmberZNet 7.4) |
+| Zigbee router, Thread border router | planned: open-source router or OpenThread RCP image, flashed by the agent | planned: `otbr-agent` for Thread | planned |
+
+The bridge serves one host at a time; a new connection replaces the old one, so a restarted Home Assistant does not find the port busy. The TCP port is not encrypted or authenticated, like ser2net or other network Zigbee coordinators; keep the panel on a trusted network. Switching the mode to Off closes the port and stops the advertisement. Leaving coordinator mode does not erase the Zigbee network on the radio, but ZHA loses its coordinator until the mode is switched back.
+
+Tested 2026-11-27 in the build VM against a pseudo terminal that answers like the panel's NCP (`WALLVIEW_RADIO_SERIAL` overrides the UART path): ASH reset answered through the bridge, client replacement, select and sensor states with aioesphomeapi, mDNS record with `radio_type=ezsp` and `serial_number`. Not yet tested on the panel with ZHA.
 
 ## Protocol details
 

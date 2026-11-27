@@ -53,6 +53,9 @@ pub mod message_type {
     pub const LIGHT_COMMAND_REQUEST: u16 = 32;
     pub const SUBSCRIBE_HOMEASSISTANT_SERVICES_REQUEST: u16 = 34;
     pub const HOMEASSISTANT_ACTION_REQUEST: u16 = 35;
+    pub const LIST_ENTITIES_SELECT: u16 = 52;
+    pub const SELECT_STATE: u16 = 53;
+    pub const SELECT_COMMAND_REQUEST: u16 = 54;
     pub const LIST_ENTITIES_BUTTON: u16 = 61;
     pub const BUTTON_COMMAND_REQUEST: u16 = 62;
     pub const LIST_ENTITIES_TEXT: u16 = 97;
@@ -159,6 +162,7 @@ fn handle_client(
     let mut subscriptions = Subscriptions::default();
     let mut sign_in_requests = device.sign_in_requests();
     let mut last_presence = None;
+    let mut radio_changes = device.radio.changes();
     let mut last_sensors = Instant::now();
     loop {
         if keys.generation() != generation {
@@ -193,6 +197,12 @@ fn handle_client(
         }
         if !subscriptions.states {
             continue;
+        }
+        if device.radio.changes() != radio_changes {
+            radio_changes = device.radio.changes();
+            for (message_type, data) in entities::radio_states(device) {
+                sender.send(message_type, &data)?;
+            }
         }
         if let Some((near, state)) = entities::presence_state(device) {
             if last_presence != Some(near) {
@@ -275,6 +285,7 @@ fn handle_message(
                 sender.send(state_type, &state)?;
             }
         }
+        SELECT_COMMAND_REQUEST => entities::handle_select(device, data),
         BUTTON_COMMAND_REQUEST => entities::handle_button(device, data),
         EXECUTE_SERVICE_REQUEST => entities::handle_service(device, data),
         TEXT_COMMAND_REQUEST => {

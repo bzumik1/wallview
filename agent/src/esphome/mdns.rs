@@ -1,4 +1,4 @@
-use mdns_sd::{IfKind, ServiceDaemon, ServiceInfo};
+use mdns_sd::{ServiceDaemon, ServiceInfo};
 
 use crate::device::Device;
 
@@ -8,16 +8,13 @@ const SERVICE_TYPE: &str = "_esphomelib._tcp.local.";
 const NOISE: &str = "Noise_NNpsk0_25519_ChaChaPoly_SHA256";
 
 pub struct Advertisement {
-    daemon: ServiceDaemon,
+    daemon: &'static ServiceDaemon,
     fullname: String,
 }
 
 impl Advertisement {
     pub fn start(device: &Device, has_key: bool) -> Option<Self> {
-        let daemon = ServiceDaemon::new()
-            .map_err(|error| eprintln!("wallview-agent: mdns: {error}"))
-            .ok()?;
-        let _ = daemon.disable_interface(IfKind::Name("usb0".into()));
+        let daemon = crate::mdns::daemon()?;
         let node = device.node_name();
         let mut properties = vec![
             ("version", ESPHOME_VERSION.to_string()),
@@ -51,6 +48,5 @@ impl Advertisement {
 impl Drop for Advertisement {
     fn drop(&mut self) {
         let _ = self.daemon.unregister(&self.fullname);
-        let _ = self.daemon.shutdown();
     }
 }

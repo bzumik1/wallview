@@ -20,7 +20,7 @@ Mainline Linux 6.18 runs on an NSPanel Pro 86 (Gen1) with the original bootloade
 | Bluetooth RTL8723DS | `hci_uart` H5 + `btrtl` | works (vendor firmware) |
 | Light/proximity sensor | `stk3310` | works |
 | Speaker, microphone (RK809 codec) | `rk817` codec | works |
-| Zigbee/Thread module EFR32MG21 | UART5 | answers (EZSP) |
+| Zigbee/Thread module EFR32MG21 | UART5 | Zigbee coordinator over the network (EZSP bridge in the agent); Thread planned |
 | Hardware watchdog | `dw_wdt` | works |
 
 | Phase | State |
@@ -28,7 +28,7 @@ Mainline Linux 6.18 runs on an NSPanel Pro 86 (Gen1) with the original bootloade
 | 0 · Preparation | done |
 | 1 · Bootloader and kernel | nearly done; vendor U-Boot kept, own bootloader later |
 | 2 · System and kiosk | in progress: Buildroot root file system with WPE WebKit/Cog building, boot flow, start screen |
-| 3 · Home Assistant integration | in progress: `wallview-agent` speaks the ESPHome native API (mDNS, Noise, key provisioning, 13 entities), tested with aioesphomeapi |
+| 3 · Home Assistant integration | in progress: `wallview-agent` speaks the ESPHome native API (mDNS, Noise, key provisioning, 15 entities), tested with aioesphomeapi |
 | 4 · User experience | started: boot logo, start/offline screen |
 | 5–9 | not started |
 
