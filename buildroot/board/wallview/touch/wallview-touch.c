@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/timerfd.h>
 #include <time.h>
 #include <unistd.h>
@@ -93,10 +94,10 @@ static int drm = -1;
 static int drm_failed;
 static int drm_warned;
 static int64_t drm_retry_at;
+static int64_t drm_backoff = 5 * NSEC_PER_SEC;
 static int vblank_pending;
 static int phase_timer = -1;
 static int64_t frame = NSEC_PER_SEC / 60;
-static int64_t tick;
 static int64_t last_vblank;
 static const struct options *opts;
 static struct input_event pending[256];
@@ -183,7 +184,7 @@ arm_phase(int64_t at)
 }
 
 static int
-held_by_other(const char *path)
+held_by_other(dev_t device)
 {
     DIR *proc = opendir("/proc");
     struct dirent *entry;
@@ -208,17 +209,13 @@ held_by_other(const char *path)
         if (!fds)
             continue;
         while (!found && (fd = readdir(fds))) {
-            char link[320], target[256];
-            ssize_t length;
+            char link[320];
+            struct stat st;
 
             if (fd->d_name[0] == '.')
                 continue;
             snprintf(link, sizeof(link), "%s/%s", dir, fd->d_name);
-            length = readlink(link, target, sizeof(target) - 1);
-            if (length <= 0)
-                continue;
-            target[length] = 0;
-            found = !strcmp(target, path);
+            found = stat(link, &st) == 0 && S_ISCHR(st.st_mode) && st.st_rdev == device;
         }
         closedir(fds);
     }
@@ -231,9 +228,29 @@ open_drm(void)
 {
     if (drm >= 0 || drm_failed || !opts || !opts->vblank || now_ns() < drm_retry_at)
         return;
-    drm_retry_at = now_ns() + 5 * NSEC_PER_SEC;
-    if (!held_by_other(opts->drm_path))
+    struct stat node;
+    int64_t started = now_ns();
+
+    drm_retry_at = started + drm_backoff;
+    if (drm_backoff < 60 * NSEC_PER_SEC)
+        drm_backoff *= 2;
+    if (stat(opts->drm_path, &node) < 0 || !S_ISCHR(node.st_mode)) {
+        if (!drm_warned)
+            fprintf(stderr, "wallview-touch: %s is not a device node, using the timer\n", opts->drm_path);
+        drm_warned = 1;
         return;
+    }
+
+    int held = held_by_other(node.st_rdev);
+
+    if (opts->debug)
+        fprintf(stderr, "wallview-touch: drm scan %.1f ms, held %d\n", (now_ns() - started) / 1e6, held);
+    if (!held) {
+        if (!drm_warned)
+            fprintf(stderr, "wallview-touch: no other process holds %s, using the timer\n", opts->drm_path);
+        drm_warned = 1;
+        return;
+    }
 
     int fd = open(opts->drm_path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
 
@@ -259,6 +276,7 @@ open_drm(void)
         return;
     }
     drm = fd;
+    drm_backoff = 5 * NSEC_PER_SEC;
 }
 
 static void
@@ -294,9 +312,13 @@ arm_timer(int on)
 
     if (mode == timer_armed)
         return;
+    if (!mode && phase_timer >= 0) {
+        struct itimerspec off = { 0 };
+
+        timerfd_settime(phase_timer, 0, &off, NULL);
+    }
     if (set_timer(mode == 2 ? 3 * frame : mode == 1 ? period : 0) == 0)
         timer_armed = mode;
-    tick = mode == 2 ? frame : period;
 }
 
 static int64_t
@@ -325,7 +347,6 @@ read_vblank(void)
         vblank_pending = 0;
         if (timer_armed == 2)
             set_timer(3 * frame);
-        tick = frame;
     }
     return latest;
 }
@@ -655,7 +676,8 @@ resample(const struct options *options, int64_t now)
         if (c->offset_x != 0 || c->offset_y != 0) {
             x = round_half_away(x + c->offset_x);
             y = round_half_away(y + c->offset_y);
-            double decay = tick > 0 && tick != opts->period ? pow(opts->blend, (double)tick / opts->period) : opts->blend;
+            int64_t step = timer_armed == 2 ? frame : opts->period;
+            double decay = step != opts->period ? pow(opts->blend, (double)step / opts->period) : opts->blend;
 
             c->offset_x *= decay;
             c->offset_y *= decay;
