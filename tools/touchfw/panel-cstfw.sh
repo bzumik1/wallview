@@ -9,16 +9,17 @@
 # controller's flash (see docs/touch-controller.md, "Tools").
 #
 # info/boot-check/boot-checksum unbind the driver only if it is bound, and bind it
-# again only if it was bound and no flash has failed (/tmp/cstfw.failed).
+# again only if it was bound and no flash has failed (/data/wallview/cstfw-failed).
 #
 # flash/recover run detached on the panel (tools/touchfw/cstfw-run.sh), which
 # from then on owns the lock: losing SSH or Ctrl-C here cannot stop or unlock a
 # flash. `follow` attaches to a running or finished flash again. After a failed
-# flash the driver stays unbound, the agent paused and the lock held; run recover.
+# flash the driver stays unbound, the agent paused, the lock held and
+# /data/wallview/cstfw-failed set (it survives a reboot); run recover.
 set -eu
 PANEL=${1:-}
 CMD=${2:-}
-SSH="ssh -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
+SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
 usage() {
 	sed -n '2,5p' "$0" | sed 's/^# //' >&2
 	exit 2
@@ -43,25 +44,32 @@ REPO=$(cd "$HERE/../.." && pwd)
 OWNER="${WALLVIEW_AGENT:-panel-cstfw $(hostname -s 2>/dev/null || echo mac)} · touch controller"
 OWNER=$(printf '%s' "$OWNER" | tr -d "'")
 
+MARK=/data/wallview/cstfw-failed
+RUNNER_OWNER="touch controller flash (cstfw-run)"
+
 follow() {
 	# Waits for the detached run's result; gives up after 300 s (5 attempts take at most about 2 min).
 	$SSH "$PANEL" 'R=/tmp/cstfw.run; n=0
+		[ -d $R ] || { echo "no flash run on the panel" >&2; exit 96; }
 		while [ ! -s $R/rc ]; do
 			n=$((n + 1))
 			if [ $n -gt 300 ]; then echo "no result after 300 s" >&2; exit 97; fi
-			if [ $n -gt 5 ] && { [ ! -s $R/pid ] || ! kill -0 "$(cat $R/pid)" 2>/dev/null; } && [ ! -s $R/rc ]; then
+			if [ $n -gt 5 ] && ! pidof cstfw > /dev/null && { [ ! -s $R/pid ] || ! kill -0 "$(cat $R/pid)" 2>/dev/null; } && [ ! -s $R/rc ]; then
 				echo "the flash runner ended without a result" >&2; cat $R/log 2>/dev/null; exit 98
 			fi
 			sleep 1
 		done
-		cat $R/log; rc=$(cat $R/rc)
-		case "$rc" in 0 | 2 | 3) rm -rf $R ;; esac
-		exit "$rc"' && rc=0 || rc=$?
+		cat $R/log; exit "$(cat $R/rc)"' && rc=0 || rc=$?
 	case "$rc" in
 	0) echo "flash done and verified" ;;
-	2 | 3) echo "flash refused, nothing written" >&2 ;;
+	2 | 3 | 5) echo "flash refused or boot mode not reached, nothing written (rc $rc)" >&2 ;;
+	96) ;;
+	97) echo "no result yet: the flash may still run on the panel. Run: $0 $PANEL follow" >&2 ;;
 	255) echo "connection lost; the flash continues on the panel and keeps the lock. Run: $0 $PANEL follow" >&2 ;;
-	*) echo "FLASH FAILED (rc $rc): driver left unbound, agent paused, lock held. Do not reboot or power off; run: $0 $PANEL recover <vendor image> --erase-and-program" >&2 ;;
+	*)
+		echo "FLASH FAILED or unfinished (rc $rc): $MARK is set, driver unbound, agent paused, lock held." >&2
+		echo "Run: $0 $PANEL recover <vendor image> --erase-and-program (a reboot is not needed; after one, recover works the same)" >&2
+		;;
 	esac
 	return "$rc"
 }
@@ -78,18 +86,24 @@ limactl shell wallview -- bash -c '~/build/br/host/bin/aarch64-none-linux-gnu-gc
 	_ "$OUT" "$HERE/cstfw.c"
 [ -s "$OUT" ] || { echo "cstfw was not built" >&2; exit 1; }
 
-# After a failed flash the failed run still holds the lock under our owner name: only recover may continue then.
-held_by_us_after_failure() {
-	$SSH "$PANEL" "[ -e /tmp/cstfw.failed ] && [ \"\$(cat /tmp/wallview-panel.lock/owner 2>/dev/null)\" = '$OWNER' ]"
-}
-if [ "$CMD" = recover ] && held_by_us_after_failure; then
-	echo "continuing under the lock kept by the failed flash"
+# A finished or dead run directory is stale; a live one (cstfw or the runner still running) blocks everything.
+$SSH "$PANEL" 'R=/tmp/cstfw.run
+	[ -d $R ] || exit 0
+	if [ ! -s $R/rc ] && { pidof cstfw > /dev/null || { [ -s $R/pid ] && kill -0 "$(cat $R/pid)" 2>/dev/null; }; }; then
+		echo "a flash is running on the panel: use follow" >&2; exit 75
+	fi
+	echo "removing the finished run directory (rc $(cat $R/rc 2>/dev/null || echo none))"
+	rm -rf $R'
+
+# After a failed (or interrupted) flash the lock stays with the runner; recover takes it over.
+if [ "$CMD" = recover ] && $SSH "$PANEL" "[ -e $MARK ] && [ \"\$(cat /tmp/wallview-panel.lock/owner 2>/dev/null)\" = '$RUNNER_OWNER' ]"; then
+	echo "taking over the lock kept by the failed flash: $($SSH "$PANEL" "cat $MARK")"
 else
 	"$REPO/tools/panel-lock.sh" "$PANEL" acquire "$OWNER"
 fi
-trap '"$REPO/tools/panel-lock.sh" "$PANEL" release "$OWNER"' EXIT
+# Releases only a lock still under OWNER: once a runner has taken it, this does nothing.
+trap '"$REPO/tools/panel-lock.sh" "$PANEL" release "$OWNER" 2>/dev/null || true' EXIT
 
-$SSH "$PANEL" '[ ! -e /tmp/cstfw.run ] || { echo "a flash run is active or unfinished (/tmp/cstfw.run): use follow" >&2; exit 75; }'
 $SSH "$PANEL" 'cat > /tmp/cstfw && chmod +x /tmp/cstfw' < "$OUT"
 
 case "$CMD" in
@@ -98,7 +112,7 @@ info | boot-check | boot-checksum)
 	$SSH "$PANEL" "D=/sys/bus/i2c/drivers/Hynitron-TS
 		bound=0
 		[ -e \$D/1-005a ] && bound=1
-		if [ -e /tmp/cstfw.failed ]; then echo 'a flash failed earlier: the driver stays unbound' >&2; bound=0; fi
+		if [ -e $MARK ]; then echo 'a flash failed earlier ($MARK): the driver stays unbound' >&2; bound=0; fi
 		trap '[ \$bound = 1 ] && echo 1-005a > \$D/bind 2>/dev/null' EXIT
 		trap 'exit 1' HUP INT TERM
 		if [ \$bound = 1 ]; then echo 1-005a > \$D/unbind; fi
@@ -109,17 +123,17 @@ flash | recover)
 	[ "$CMD" = flash ] && ARG=$4
 	$SSH "$PANEL" 'cat > /tmp/cstfw-run.sh' < "$HERE/cstfw-run.sh"
 	$SSH "$PANEL" 'cat > /tmp/cst-image.bin' < "$3"
+	# The lock is handed to the runner in the same command that starts it.
 	$SSH "$PANEL" "command -v setsid > /dev/null || { echo 'no setsid on the panel' >&2; exit 3; }
 		mkdir /tmp/cstfw.run || exit 75
-		setsid sh /tmp/cstfw-run.sh '$ARG' '$OWNER' < /dev/null > /dev/null 2>&1 &"
-	# From here the runner on the panel owns the lock.
-	trap - EXIT
+		printf '%s\n' '$RUNNER_OWNER' > /tmp/wallview-panel.lock/owner
+		setsid sh /tmp/cstfw-run.sh '$ARG' < /dev/null > /dev/null 2>&1 &"
 	follow && rc=0 || rc=$?
 	[ "$rc" = 0 ] || exit "$rc"
 	;;
 esac
 
-if $SSH "$PANEL" '[ -e /tmp/cstfw.failed ]'; then
+if $SSH "$PANEL" "[ -e $MARK ]"; then
 	echo "a flash failed earlier: driver intentionally unbound" >&2
 	exit "${rc:-1}"
 fi

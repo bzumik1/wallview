@@ -14,9 +14,10 @@
  * Exit codes: 0 programmed, verified and the new application answers (or the
  * read-only command succeeded); 2 refused before touching the chip; 3 refused
  * after reading the chip (identification or checksum differs, or the chip did
- * not answer), nothing written; 1 programming failed, the flash may be partly
- * written; 4 programmed and verified by the boot loader, but the application
- * does not answer as expected afterwards.
+ * not answer), nothing written; 5 boot mode never reached in any attempt,
+ * nothing written; 1 programming failed, the flash may be partly written;
+ * 4 programmed and verified by the boot loader, but the application does not
+ * answer as expected afterwards.
  *
  * info, boot-check and boot-checksum never write the controller's flash. flash
  * does, and is the only command that can leave the controller without a working
@@ -32,12 +33,14 @@
 #include <linux/gpio.h>
 #include <linux/i2c-dev.h>
 #include <linux/i2c.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -304,7 +307,7 @@ flash_once(const uint8_t *img)
 
     if (enter_boot()) {
         fprintf(stderr, "cstfw: boot mode not entered, nothing erased in this attempt\n");
-        return -1;
+        return -2;
     }
     if (w3(0xa0, 0x06, 0x00))
         return -1;
@@ -410,19 +413,42 @@ flash(const char *path, int recover, uint32_t current)
     signal(SIGTERM, SIG_IGN);
     signal(SIGQUIT, SIG_IGN);
 
+    /* Keep the boot loader timing (12 ms, 6 ms windows) under a busy kiosk. */
+    struct sched_param param = { .sched_priority = 50 };
+
+    sched_setscheduler(0, SCHED_FIFO, &param);
+    mlockall(MCL_CURRENT | MCL_FUTURE);
+
     /* Like the vendor driver: on any failure start again from reset and page 0, up to 5 times. */
+    int erased = 0;
+
     for (int attempt = 1; attempt <= 5; attempt++) {
+        int r;
+
         printf("attempt %d\n", attempt);
         fflush(stdout);
-        if (flash_once(img) == 0) {
-            sleep_ms(60);
+        r = flash_once(img);
+        if (r == 0) {
+            static const int waits[] = { 60, 200, 500 };
+
             printf("programmed and verified by the boot loader; chip after:\n");
-            if (info_read(chip, 1) || memcmp(chip, ident, sizeof(ident)) || le32(chip + 24) != le32(img + 0x1dfc)) {
-                fprintf(stderr, "cstfw: the new application does not answer as expected\n");
-                return 4;
+            for (int i = 0; i < 3; i++) {
+                if (i > 0 && reset_pulse(0))
+                    break;
+                sleep_ms(waits[i]);
+                if (info_read(chip, 1) == 0 && memcmp(chip, ident, sizeof(ident)) == 0 &&
+                    le32(chip + 24) == le32(img + 0x1dfc))
+                    return 0;
             }
-            return 0;
+            fprintf(stderr, "cstfw: the new application does not answer as expected\n");
+            return 4;
         }
+        if (r != -2)
+            erased = 1;
+    }
+    if (!erased) {
+        fprintf(stderr, "cstfw: boot mode was never reached, nothing written\n");
+        return 5;
     }
     fprintf(stderr, "cstfw: FAILED after 5 attempts. Do not power off and do not bind the driver;\n"
                     "       flash the vendor image with --recover.\n");
