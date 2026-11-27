@@ -8,7 +8,7 @@ touch_loop() {
 		if [ "$(wc -c < "$LOG" 2>/dev/null || echo 0)" -gt 65536 ]; then
 			tail -c 16384 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 		fi
-		wallview-touch >> "$LOG" 2>&1
+		WALLVIEW_TOUCH_LIFT_MS=$(cat /data/wallview/touch-lift-ms 2>/dev/null || echo 100) wallview-touch >> "$LOG" 2>&1
 		sleep 2
 	done
 }
