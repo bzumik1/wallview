@@ -24,21 +24,40 @@ The vendor firmware is not distributed: it stays in the git-ignored `local/firmw
 
 ## Tools (`tools/touchfw/`)
 
-Written 2026-11-27 for the 120 Hz goal, not run on hardware yet.
+Written 2026-11-27 for the 120 Hz goal and reviewed once (independent senior embedded review); not run on hardware yet.
 
-- `cstfw.c`: `info` (step 1, trailer registers in info mode), `boot-check` (step 2: reset, `A0 01 AA`, `0xA003 == 0x55`, reads `0xA000`/`0xA008`, reset; no erase), `flash <image> --erase-and-program` (plan (a)/(b), the vendor sequence from the table below, 5 attempts from page 0). `flash` refuses an image whose size, identification trailer (13×8, 480×480, check code, project `0x4b01`, chip `0xa8`) or checksum is wrong. It refuses to run while the kernel driver is bound.
-- `panel-cstfw.sh root@<panel> info|boot-check|flash <image> --erase-and-program`: builds `cstfw` in the Lima VM, unbinds the driver, runs it, binds the driver again.
-- `cstimg.py show|set`: shows the suspected front-end fields of an image, or writes a copy with changed configuration bytes and a recomputed checksum (version unchanged, offsets limited to the configuration area).
+- `cstfw.c`:
+  - `info`: step 1, trailer registers in info mode.
+  - `boot-check`: step 2, reset, `A0 01 AA`, `0xA003 == 0x55`, reset. Sends no erase, page or data command.
+  - `boot-checksum`: plan (a) step 3, as `boot-check` plus `0xA000`/`0xA008` in boot mode; prints "no checksum available" unless `0xA000 == 01`.
+  - `flash <image> --current-checksum <0x...> --erase-and-program`: plan (a)/(b), the vendor sequence from the table below, 5 attempts from page 0. Before anything is written it reads the chip and refuses unless the chip's identification (`0xD1F4–0xD207`) equals the image's and the chip's `0xD20C` equals `--current-checksum`; it also refuses an image with the wrong size, identification or checksum. From the first reset on it ignores SIGHUP, SIGINT, SIGTERM and SIGPIPE.
+  - Reads are a register write with STOP and a separate read, as the vendor driver does. The reset line is only touched if `/dev/gpiochip0` is `gpio0` and line 12 is unused. Every command refuses to run while the kernel driver is bound.
+- `panel-cstfw.sh root@<panel> info|boot-check|boot-checksum` or `... flash <image> <current-checksum> --erase-and-program`:
+  - builds `cstfw` in the Lima VM into `out/cstfw/`, takes the panel lock (`tools/panel-lock.sh`), unbinds the driver, runs `cstfw` and binds the driver again; checks the bind and `wallview-touch` afterwards.
+  - Non-flash commands rebind through a remote trap even if the connection drops.
+  - `flash` runs detached on the panel (`setsid`, log `/tmp/cstfw.log`), so losing SSH cannot stop it between pages. After a failed flash the driver is deliberately not bound again; run the same flash again.
+- `cstimg.py show|set`: shows the suspected front-end fields of an image (with sha256 and whether it is the vendor image), or writes a new file (never the input or an existing file) with changed bytes of the main configuration table `0x1604–0x16cb` and a recomputed checksum; version unchanged.
 
-Typical session for plan (b), each step with the owner's approval:
+What must be true before `flash` is ever run (the revert guarantee):
+
+1. `boot-check` passed on this panel with the same `cstfw` build, and `info` after it shows the seven expected rows.
+2. The vendor image exists in two places and its sha256 (`0496946b…bbf1`) is checked right before flashing.
+3. `0xD20C` is served from the flash trailer, not computed, so it does not prove the content. Only a boot-loader checksum (`boot-checksum`, if it gives one) or the vendor kernel's behaviour supports it.
+4. The page-select encoding (`A0 14 <lo> <hi>`) and the data registers `0xA018 + 4k` (up to `0xA214`) have been checked against the vendor disassembly by a second reader.
+5. The vendor Android `boot.img` has been booted once on the development panel (plan (a) step 6 fallback).
+6. Stable power. The first flash is the unmodified vendor image. Jakub accepts that recovery is inferred until that first re-flash has succeeded.
+
+Typical session, each step with the owner's approval:
 
 ```
 tools/touchfw/panel-cstfw.sh root@PANEL info
 tools/touchfw/panel-cstfw.sh root@PANEL boot-check
-tools/touchfw/panel-cstfw.sh root@PANEL flash local/firmware/hynitron/cst226se-vendor-0x03000001.bin --erase-and-program   # twice
+tools/touchfw/panel-cstfw.sh root@PANEL boot-checksum
+sha256sum local/firmware/hynitron/cst226se-vendor-0x03000001.bin
+tools/touchfw/panel-cstfw.sh root@PANEL flash local/firmware/hynitron/cst226se-vendor-0x03000001.bin 0x99630e41 --erase-and-program   # twice
 tools/touchfw/cstimg.py set local/firmware/hynitron/cst226se-vendor-0x03000001.bin local/firmware/hynitron/try-166a-10.bin 0x166a=10
-tools/touchfw/panel-cstfw.sh root@PANEL flash local/firmware/hynitron/try-166a-10.bin --erase-and-program
-# measure with tools/perf/touchprobe, then back to the vendor image if unclear
+tools/touchfw/panel-cstfw.sh root@PANEL flash local/firmware/hynitron/try-166a-10.bin 0x99630e41 --erase-and-program
+# measure with tools/perf/touchprobe; back to the vendor image with --current-checksum of the try image
 ```
 
 ## Where the firmware is

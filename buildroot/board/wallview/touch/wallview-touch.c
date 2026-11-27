@@ -38,6 +38,7 @@ struct contact {
     int emitted_x;
     int emitted_y;
     int predicted;
+    int fresh;
 };
 
 struct options {
@@ -48,6 +49,7 @@ struct options {
 };
 
 static struct contact contacts[MAX_SLOTS];
+static int min_x, max_x = 479, min_y, max_y = 479;
 static int output;
 static int timer;
 static int timer_armed;
@@ -119,7 +121,10 @@ arm_timer(int on)
         return;
     if (on)
         spec.it_interval.tv_nsec = spec.it_value.tv_nsec = period;
-    timerfd_settime(timer, 0, &spec, NULL);
+    if (timerfd_settime(timer, 0, &spec, NULL) < 0) {
+        perror("wallview-touch: timerfd_settime");
+        return;
+    }
     timer_armed = on;
 }
 
@@ -150,6 +155,7 @@ handle_frame(int64_t time)
             c->emitted_x = -1;
             c->emitted_y = -1;
             c->predicted = 0;
+            c->fresh = 0;
             if (first_active() == slot)
                 queue(EV_KEY, BTN_TOUCH, 1);
             emit_position(slot, c->x, c->y);
@@ -164,8 +170,10 @@ handle_frame(int64_t time)
              * be a last move against the swipe and spoil the fling velocity,
              * so the contact is released where it was shown.
              */
-            if (!c->predicted)
+            /* A real sample that came after the last tick is newer than any prediction: show it. */
+            if (!c->predicted || c->fresh)
                 emit_position(slot, c->x, c->y);
+            c->fresh = 0;
             queue(EV_ABS, ABS_MT_SLOT, slot);
             queue(EV_ABS, ABS_MT_TRACKING_ID, -1);
             c->active = 0;
@@ -180,6 +188,7 @@ handle_frame(int64_t time)
             }
         } else if (c->dirty) {
             c->dirty = 0;
+            c->fresh = 1;
             add_sample(c, time);
         }
     }
@@ -188,12 +197,24 @@ handle_frame(int64_t time)
 }
 
 static int
+round_half_away(double v)
+{
+    return v >= 0 ? (int)(v + 0.5) : -(int)(-v + 0.5);
+}
+
+static int
+clamp(int v, int lo, int hi)
+{
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
+static int
 interpolate(int a, int b, int64_t ta, int64_t tb, int64_t t)
 {
     if (tb == ta)
         return b;
     double alpha = (double)(t - ta) / (double)(tb - ta);
-    return (int)(a + (b - a) * alpha + (b >= a ? 0.5 : -0.5));
+    return round_half_away(a + (b - a) * alpha);
 }
 
 static void
@@ -248,16 +269,51 @@ resample(const struct options *options, int64_t now)
                 c->predicted = x != last->x || y != last->y;
             }
         }
-        emit_position(slot, x, y);
+        c->fresh = 0;
+        emit_position(slot, clamp(x, min_x, max_x), clamp(y, min_y, max_y));
     }
     flush();
+}
+
+static int dropped;
+static int input_fd;
+
+/* After SYN_DROPPED: end every contact the device no longer reports, as libevdev would. */
+static void
+resync(int64_t time)
+{
+    struct {
+        uint32_t code;
+        int32_t values[MAX_SLOTS];
+    } ids = { .code = ABS_MT_TRACKING_ID };
+
+    if (ioctl(input_fd, EVIOCGMTSLOTS(sizeof(ids)), &ids) < 0)
+        return;
+    for (int slot = 0; slot < MAX_SLOTS; slot++)
+        if ((contacts[slot].active || contacts[slot].started) && ids.values[slot] < 0) {
+            contacts[slot].ended = 1;
+            contacts[slot].started = 0;
+        }
+    handle_frame(time);
 }
 
 static void
 handle_event(const struct input_event *event, int *slot)
 {
     struct contact *c = &contacts[*slot];
+    int64_t time = event->input_event_sec * NSEC_PER_SEC + event->input_event_usec * 1000LL;
 
+    if (event->type == EV_SYN && event->code == SYN_DROPPED) {
+        dropped = 1;
+        return;
+    }
+    if (dropped) {
+        if (event->type == EV_SYN && event->code == SYN_REPORT) {
+            dropped = 0;
+            resync(time);
+        }
+        return;
+    }
     if (event->type == EV_ABS) {
         switch (event->code) {
         case ABS_MT_SLOT:
@@ -287,7 +343,7 @@ handle_event(const struct input_event *event, int *slot)
             break;
         }
     } else if (event->type == EV_SYN && event->code == SYN_REPORT) {
-        handle_frame(event->input_event_sec * NSEC_PER_SEC + event->input_event_usec * 1000LL);
+        handle_frame(time);
     }
 }
 
@@ -314,6 +370,13 @@ create_output(int input)
             continue;
         if (code == ABS_MT_SLOT && setup.absinfo.maximum >= MAX_SLOTS)
             setup.absinfo.maximum = MAX_SLOTS - 1;
+        if (code == ABS_MT_POSITION_X) {
+            min_x = setup.absinfo.minimum;
+            max_x = setup.absinfo.maximum;
+        } else if (code == ABS_MT_POSITION_Y) {
+            min_y = setup.absinfo.minimum;
+            max_y = setup.absinfo.maximum;
+        }
         ioctl(fd, UI_SET_ABSBIT, code);
         ioctl(fd, UI_ABS_SETUP, &setup);
     }
@@ -364,7 +427,7 @@ main(int argc, char **argv)
     const char *device = argc > 1 ? argv[1] : NULL;
     int rate = getenv("WALLVIEW_TOUCH_RATE") ? atoi(getenv("WALLVIEW_TOUCH_RATE")) : 120;
     struct options options = {
-        .period = NSEC_PER_SEC / (rate > 0 ? rate : 120),
+        .period = NSEC_PER_SEC / (rate >= 2 && rate <= 1000 ? rate : 120),
         .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 8),
         .max_prediction = env_ms("WALLVIEW_TOUCH_PREDICTION_MS", 12),
         .max_sample_gap = env_ms("WALLVIEW_TOUCH_MAX_GAP_MS", 60),
@@ -376,13 +439,32 @@ main(int argc, char **argv)
         fprintf(stderr, "wallview-touch: touchscreen: %s\n", strerror(errno));
         return 1;
     }
+    input_fd = input;
+
+    /*
+     * Grab only while no finger is down: grabbed in the middle of a touch, the
+     * browser would never see that touch end on the raw device.
+     */
+    for (int waited = 0;; waited++) {
+        unsigned long keys[(KEY_CNT + 63) / 64] = { 0 };
+
+        if (ioctl(input, EVIOCGKEY(sizeof(keys)), keys) < 0 ||
+            !(keys[BTN_TOUCH / 64] & (1ul << (BTN_TOUCH % 64))))
+            break;
+        if (waited == 100) {
+            fprintf(stderr, "wallview-touch: touch held for 5 s, grabbing anyway\n");
+            break;
+        }
+        usleep(50000);
+    }
+    /* Grab before creating the virtual device, so a second instance never adds a phantom touchscreen. */
+    if (ioctl(input, EVIOCGRAB, 1) < 0) {
+        fprintf(stderr, "wallview-touch: grab: %s\n", strerror(errno));
+        return 1;
+    }
     output = create_output(input);
     if (output < 0) {
         fprintf(stderr, "wallview-touch: uinput: %s\n", strerror(errno));
-        return 1;
-    }
-    if (ioctl(input, EVIOCGRAB, 1) < 0) {
-        fprintf(stderr, "wallview-touch: grab: %s\n", strerror(errno));
         return 1;
     }
 
@@ -393,13 +475,20 @@ main(int argc, char **argv)
     /* The timer only runs while a finger is down, so an idle panel is not woken 120 times a second. */
     period = options.period;
     timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    if (timer < 0) {
+        fprintf(stderr, "wallview-touch: timerfd: %s\n", strerror(errno));
+        return 1;
+    }
 
     int slot = 0;
     struct pollfd fds[2] = { { input, POLLIN, 0 }, { timer, POLLIN, 0 } };
 
     for (;;) {
-        if (poll(fds, 2, -1) < 0 && errno != EINTR)
+        if (poll(fds, 2, -1) < 0) {
+            if (errno == EINTR)
+                continue;
             return 1;
+        }
         if (fds[0].revents & (POLLERR | POLLHUP))
             return 1;
         if (fds[0].revents & POLLIN) {
