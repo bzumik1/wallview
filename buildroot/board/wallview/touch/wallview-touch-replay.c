@@ -248,6 +248,7 @@ main(int argc, char **argv)
     }
     build_points();
     load_options(&options);
+    options.vblank = 0;
     opts = &options;
     period = options.period;
     pipe(pipe_out);

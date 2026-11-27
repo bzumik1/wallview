@@ -1,3 +1,4 @@
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <drm/drm.h>
@@ -78,6 +79,8 @@ struct options {
     int debug;
     int vblank;
     const char *drm_path;
+    const char *drm_driver;
+    int64_t vblank_offset;
 };
 
 static struct contact contacts[MAX_SLOTS];
@@ -88,8 +91,13 @@ static int timer_armed;
 static int64_t period;
 static int drm = -1;
 static int drm_failed;
+static int drm_warned;
 static int64_t drm_retry_at;
 static int vblank_pending;
+static int phase_timer = -1;
+static int64_t frame = NSEC_PER_SEC / 60;
+static int64_t tick;
+static int64_t last_vblank;
 static const struct options *opts;
 static struct input_event pending[256];
 static int pending_count;
@@ -149,15 +157,73 @@ emit_position(int slot, int x, int y)
     c->emitted_y = y;
 }
 
-static void
+static int
 set_timer(int64_t interval)
 {
     struct itimerspec spec = { 0 };
 
     spec.it_interval.tv_sec = spec.it_value.tv_sec = interval / NSEC_PER_SEC;
     spec.it_interval.tv_nsec = spec.it_value.tv_nsec = interval % NSEC_PER_SEC;
-    if (timerfd_settime(timer, 0, &spec, NULL) < 0)
+    if (timerfd_settime(timer, 0, &spec, NULL) < 0) {
         perror("wallview-touch: timerfd_settime");
+        return -1;
+    }
+    return 0;
+}
+
+static void
+arm_phase(int64_t at)
+{
+    struct itimerspec spec = { 0 };
+
+    spec.it_value.tv_sec = at / NSEC_PER_SEC;
+    spec.it_value.tv_nsec = at % NSEC_PER_SEC;
+    if (timerfd_settime(phase_timer, TFD_TIMER_ABSTIME, &spec, NULL) < 0)
+        perror("wallview-touch: timerfd_settime");
+}
+
+static int
+held_by_other(const char *path)
+{
+    DIR *proc = opendir("/proc");
+    struct dirent *entry;
+    int found = 0;
+    pid_t self = getpid();
+
+    if (!proc)
+        return 0;
+    while (!found && (entry = readdir(proc))) {
+        char *end;
+        long pid = strtol(entry->d_name, &end, 10);
+
+        if (*end || pid <= 0 || pid == self)
+            continue;
+
+        char dir[64];
+
+        snprintf(dir, sizeof(dir), "/proc/%ld/fd", pid);
+        DIR *fds = opendir(dir);
+        struct dirent *fd;
+
+        if (!fds)
+            continue;
+        while (!found && (fd = readdir(fds))) {
+            char link[320], target[256];
+            ssize_t length;
+
+            if (fd->d_name[0] == '.')
+                continue;
+            snprintf(link, sizeof(link), "%s/%s", dir, fd->d_name);
+            length = readlink(link, target, sizeof(target) - 1);
+            if (length <= 0)
+                continue;
+            target[length] = 0;
+            found = !strcmp(target, path);
+        }
+        closedir(fds);
+    }
+    closedir(proc);
+    return found;
 }
 
 static void
@@ -165,19 +231,43 @@ open_drm(void)
 {
     if (drm >= 0 || drm_failed || !opts || !opts->vblank || now_ns() < drm_retry_at)
         return;
+    drm_retry_at = now_ns() + 5 * NSEC_PER_SEC;
+    if (!held_by_other(opts->drm_path))
+        return;
+
     int fd = open(opts->drm_path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
 
     if (fd < 0) {
-        fprintf(stderr, "wallview-touch: %s: %s, using the timer\n", opts->drm_path, strerror(errno));
-        drm_failed = 1;
+        if (!drm_warned)
+            fprintf(stderr, "wallview-touch: %s: %s, using the timer\n", opts->drm_path, strerror(errno));
+        drm_warned = 1;
         return;
     }
     if (ioctl(fd, DRM_IOCTL_DROP_MASTER, 0) == 0) {
         close(fd);
-        drm_retry_at = now_ns() + NSEC_PER_SEC;
+        return;
+    }
+
+    char name[32] = { 0 };
+    struct drm_version version = { .name_len = sizeof(name) - 1, .name = name };
+
+    if (ioctl(fd, DRM_IOCTL_VERSION, &version) < 0 || strcmp(name, opts->drm_driver)) {
+        fprintf(stderr, "wallview-touch: %s is driver \"%s\", not %s, using the timer\n", opts->drm_path, name,
+                opts->drm_driver);
+        close(fd);
+        drm_failed = 1;
         return;
     }
     drm = fd;
+}
+
+static void
+close_drm(void)
+{
+    if (drm >= 0)
+        close(drm);
+    drm = -1;
+    vblank_pending = 0;
 }
 
 static int
@@ -204,33 +294,40 @@ arm_timer(int on)
 
     if (mode == timer_armed)
         return;
-    set_timer(mode == 2 ? 3 * period : mode == 1 ? period : 0);
-    timer_armed = mode;
+    if (set_timer(mode == 2 ? 3 * frame : mode == 1 ? period : 0) == 0)
+        timer_armed = mode;
+    tick = mode == 2 ? frame : period;
 }
 
-static int
+static int64_t
 read_vblank(void)
 {
-    char buffer[1024];
+    struct drm_event_vblank events[16];
     ssize_t size;
-    int seen = 0;
+    int64_t latest = 0;
 
-    while ((size = read(drm, buffer, sizeof(buffer))) > 0)
-        for (ssize_t at = 0; at + (ssize_t)sizeof(struct drm_event) <= size;) {
-            struct drm_event *event = (struct drm_event *)(buffer + at);
+    while ((size = read(drm, events, sizeof(events))) > 0)
+        for (ssize_t i = 0; i < size / (ssize_t)sizeof(events[0]); i++) {
+            if (events[i].base.type != DRM_EVENT_VBLANK)
+                continue;
 
-            if (event->length < sizeof(*event))
-                break;
-            if (event->type == DRM_EVENT_VBLANK)
-                seen = 1;
-            at += event->length;
+            int64_t time = events[i].tv_sec * NSEC_PER_SEC + events[i].tv_usec * 1000LL;
+            int64_t gap = time - last_vblank;
+
+            if (last_vblank && gap > frame / 2 && gap < frame * 3 / 2 && gap > 4 * NSEC_PER_MSEC &&
+                gap < 50 * NSEC_PER_MSEC)
+                frame = (7 * frame + gap) / 8;
+            last_vblank = time;
+            if (time > latest)
+                latest = time;
         }
-    if (seen) {
+    if (latest) {
         vblank_pending = 0;
         if (timer_armed == 2)
-            set_timer(3 * period);
+            set_timer(3 * frame);
+        tick = frame;
     }
-    return seen;
+    return latest;
 }
 
 static void
@@ -558,8 +655,10 @@ resample(const struct options *options, int64_t now)
         if (c->offset_x != 0 || c->offset_y != 0) {
             x = round_half_away(x + c->offset_x);
             y = round_half_away(y + c->offset_y);
-            c->offset_x *= opts->blend;
-            c->offset_y *= opts->blend;
+            double decay = tick > 0 && tick != opts->period ? pow(opts->blend, (double)tick / opts->period) : opts->blend;
+
+            c->offset_x *= decay;
+            c->offset_y *= decay;
             if (c->offset_x > -0.5 && c->offset_x < 0.5 && c->offset_y > -0.5 && c->offset_y < 0.5)
                 c->offset_x = c->offset_y = 0;
             c->predicted = 1;
@@ -801,6 +900,8 @@ load_options(struct options *options)
         .debug = (int)env_number("WALLVIEW_TOUCH_DEBUG", 0),
         .vblank = (int)env_number("WALLVIEW_TOUCH_VBLANK", 0),
         .drm_path = getenv("WALLVIEW_TOUCH_DRM") && *getenv("WALLVIEW_TOUCH_DRM") ? getenv("WALLVIEW_TOUCH_DRM") : "/dev/dri/card0",
+        .drm_driver = getenv("WALLVIEW_TOUCH_DRM_DRIVER") && *getenv("WALLVIEW_TOUCH_DRM_DRIVER") ? getenv("WALLVIEW_TOUCH_DRM_DRIVER") : "rockchip",
+        .vblank_offset = env_ms("WALLVIEW_TOUCH_VBLANK_OFFSET_MS", 10),
     };
     if (options->blend > 0.95)
         options->blend = 0.7;
@@ -872,11 +973,17 @@ main(int argc, char **argv)
         current_slot.value < MAX_SLOTS)
         slot = current_slot.value;
 
-    struct pollfd fds[3] = { { input, POLLIN, 0 }, { timer, POLLIN, 0 }, { -1, POLLIN, 0 } };
+    phase_timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    if (phase_timer < 0) {
+        fprintf(stderr, "wallview-touch: timerfd: %s\n", strerror(errno));
+        return 1;
+    }
+
+    struct pollfd fds[4] = { { input, POLLIN, 0 }, { timer, POLLIN, 0 }, { -1, POLLIN, 0 }, { phase_timer, POLLIN, 0 } };
 
     for (;;) {
         fds[2].fd = drm;
-        if (poll(fds, 3, -1) < 0) {
+        if (poll(fds, 4, -1) < 0) {
             if (errno == EINTR)
                 continue;
             return 1;
@@ -891,15 +998,38 @@ main(int argc, char **argv)
                 for (size_t i = 0; i < (size_t)size / sizeof(events[0]); i++)
                     handle_event(&events[i], &slot);
         }
+        int handled = 0;
+
+        if (drm >= 0 && (fds[2].revents & (POLLERR | POLLHUP | POLLNVAL)))
+            close_drm();
+        else if (drm >= 0 && (fds[2].revents & POLLIN)) {
+            int64_t vblank = read_vblank();
+
+            if (vblank) {
+                int64_t at = vblank + options.vblank_offset;
+                int64_t now = now_ns();
+
+                handled = 1;
+                if (options.vblank_offset > 0 && options.vblank_offset < frame && at > now)
+                    arm_phase(at);
+                else
+                    resample(&options, now);
+            }
+        }
+        if (fds[3].revents & POLLIN) {
+            uint64_t expirations;
+
+            if (read(phase_timer, &expirations, sizeof(expirations)) > 0)
+                resample(&options, now_ns());
+        }
         if (fds[1].revents & POLLIN) {
             uint64_t expirations;
 
-            if (read(timer, &expirations, sizeof(expirations)) > 0) {
-                vblank_pending = 0;
+            if (read(timer, &expirations, sizeof(expirations)) > 0 && !handled) {
+                if (timer_armed == 2)
+                    vblank_pending = 0;
                 resample(&options, now_ns());
             }
         }
-        if (drm >= 0 && (fds[2].revents & POLLIN) && read_vblank())
-            resample(&options, now_ns());
     }
 }
