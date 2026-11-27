@@ -72,6 +72,7 @@ struct options {
     int64_t coast_after;
     int coast_max;
     double coast_speed;
+    double blend;
     int debug;
 };
 
@@ -480,8 +481,8 @@ resample(const struct options *options, int64_t now)
         if (c->offset_x != 0 || c->offset_y != 0) {
             x = round_half_away(x + c->offset_x);
             y = round_half_away(y + c->offset_y);
-            c->offset_x *= 0.7;
-            c->offset_y *= 0.7;
+            c->offset_x *= opts->blend;
+            c->offset_y *= opts->blend;
             if (c->offset_x > -0.5 && c->offset_x < 0.5 && c->offset_y > -0.5 && c->offset_y < 0.5)
                 c->offset_x = c->offset_y = 0;
             c->predicted = 1;
@@ -696,12 +697,12 @@ env_ms(const char *name, double fallback)
     return (int64_t)(env_number(name, fallback) * NSEC_PER_MSEC);
 }
 
-int
-main(int argc, char **argv)
+static void
+load_options(struct options *options)
 {
-    const char *device = argc > 1 ? argv[1] : NULL;
     int rate = (int)env_number("WALLVIEW_TOUCH_RATE", 120);
-    struct options options = {
+
+    *options = (struct options){
         .period = NSEC_PER_SEC / (rate >= 2 && rate <= 1000 ? rate : 120),
         .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 8),
         .max_prediction = env_ms("WALLVIEW_TOUCH_PREDICTION_MS", 12),
@@ -718,8 +719,20 @@ main(int argc, char **argv)
         .coast_after = env_ms("WALLVIEW_TOUCH_COAST_AFTER_MS", 40),
         .coast_max = (int)env_number("WALLVIEW_TOUCH_COAST_PX", 40),
         .coast_speed = env_number("WALLVIEW_TOUCH_COAST_PX_PER_S", 150),
+        .blend = env_number("WALLVIEW_TOUCH_BLEND", 0.7),
         .debug = (int)env_number("WALLVIEW_TOUCH_DEBUG", 0),
     };
+    if (options->blend > 0.95)
+        options->blend = 0.7;
+}
+
+int
+main(int argc, char **argv)
+{
+    const char *device = argc > 1 ? argv[1] : NULL;
+    struct options options;
+
+    load_options(&options);
     int clock = CLOCK_MONOTONIC;
     int input = open_touchscreen(device);
 

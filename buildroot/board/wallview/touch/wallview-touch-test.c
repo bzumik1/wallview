@@ -41,7 +41,7 @@ static void defaults(void) {
 	setenv("WALLVIEW_TOUCH_LIFT_MS", "", 1);
 	o = (struct options){ .period = NSEC_PER_SEC / 120, .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 8), .max_prediction = 12 * MS, .max_sample_gap = 60 * MS,
 		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 100), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 12, .start_travel = 8, .hold_speed = 60, .start_speed = 150,
-		.hold_recent = 100 * MS, .coast = 40 * MS, .coast_after = 40 * MS, .coast_max = 40, .coast_speed = 150, .debug = getenv("DBG") != NULL };
+		.hold_recent = 100 * MS, .coast = 40 * MS, .coast_after = 40 * MS, .coast_max = 40, .coast_speed = 150, .blend = 0.7, .debug = getenv("DBG") != NULL };
 }
 static int64_t drag(int64_t t, int sl, double *x, double *y, double vx, double vy, int n, int64_t dt) {
 	for (int i = 0; i < n; i++) { t += dt; run_until(t); *x += vx * dt / NSEC_PER_SEC; *y += vy * dt / NSEC_PER_SEC; move(t, sl, (int)*x, (int)*y); drain(t); }
