@@ -42,6 +42,8 @@ struct logo_gradient {
 #define DEADLINE_SECONDS 120
 #define HANDOFF_POLL_MS 100
 #define EVENT_TIMEOUT_MS 1000
+#define TERM_SHIFT 4
+#define TERM_ONE (1 << TERM_SHIFT)
 #define OPEN_ATTEMPTS 50
 #define OPEN_RETRY_MS 100
 
@@ -70,6 +72,8 @@ struct display {
 static volatile sig_atomic_t handoff_requested;
 static volatile sig_atomic_t quit_requested;
 static uint8_t layers[LAYERS][BOX_WIDTH * BOX_HEIGHT * 4];
+
+static void prepare_terms(void);
 
 static void on_handoff(int signal_number)
 {
@@ -260,6 +264,7 @@ static int prepare_layers(void)
 	store_layer(HALO, rgba);
 	free(rgba);
 	free(coverage);
+	prepare_terms();
 	return 0;
 }
 
@@ -273,37 +278,87 @@ static double tint_at(double t)
 	return TINT_HIGH * (0.5 - 0.5 * cos(2 * M_PI * t / TINT_PERIOD));
 }
 
-static inline uint32_t over(uint32_t source, uint32_t source_alpha, uint32_t destination)
+struct term {
+	int16_t base[3];
+	int16_t linear[3];
+	int16_t square[3];
+	int16_t alt[3];
+	int16_t alt_alpha;
+};
+
+static struct term terms[BOX_WIDTH * BOX_HEIGHT];
+static int16_t span_first[BOX_HEIGHT];
+static int16_t span_last[BOX_HEIGHT];
+
+static int16_t fixed(float value)
 {
-	return source + (destination * (255 - source_alpha) + 127) / 255;
+	return (int16_t)lroundf(value * TERM_ONE);
+}
+
+static void prepare_terms(void)
+{
+	for (int y = 0; y < BOX_HEIGHT; y++) {
+		span_first[y] = BOX_WIDTH;
+		span_last[y] = 0;
+		for (int x = 0; x < BOX_WIDTH; x++) {
+			int i = y * BOX_WIDTH + x;
+			const uint8_t *halo = layers[HALO] + 4 * i;
+			const uint8_t *glow = layers[GLOW] + 4 * i;
+			const uint8_t *logo = layers[LOGO] + 4 * i;
+			const uint8_t *alt = layers[TINT] + 4 * i;
+			float logo_rest = 1 - logo[3] / 255.0f;
+			float glow_alpha = glow[3] / 255.0f;
+			struct term *term = &terms[i];
+			int varies = alt[3] != 0;
+			for (int channel = 0; channel < 3; channel++) {
+				term->base[channel] = fixed(logo[channel]);
+				term->linear[channel] = fixed(logo_rest * (glow[channel] + halo[channel]));
+				term->square[channel] = fixed(-logo_rest * halo[channel] * glow_alpha);
+				term->alt[channel] = fixed(alt[channel]);
+				varies |= term->linear[channel] || term->square[channel];
+			}
+			term->alt_alpha = (int16_t)lroundf(alt[3] * 256 / 255.0f);
+			if (varies) {
+				if (x < span_first[y])
+					span_first[y] = x;
+				span_last[y] = x + 1;
+			}
+		}
+	}
+}
+
+static uint32_t compose_pixel(const struct term *term, int32_t breath, int32_t breath_squared, int32_t tint)
+{
+	uint32_t rgb[3];
+
+	for (int channel = 0; channel < 3; channel++) {
+		int32_t value = term->base[channel] + ((breath * term->linear[channel] + breath_squared * term->square[channel]) >> 8);
+		value += tint * (term->alt[channel] - (term->alt_alpha * value >> 8)) >> 8;
+		value = (value + TERM_ONE / 2) >> TERM_SHIFT;
+		rgb[channel] = value < 0 ? 0 : value > 255 ? 255 : (uint32_t)value;
+	}
+	return rgb[0] << 16 | rgb[1] << 8 | rgb[2];
+}
+
+static void compose_region(uint8_t *map, uint32_t pitch, int left, int top, double t, int whole)
+{
+	int32_t breath = (int32_t)lround(breath_at(t) * 256);
+	int32_t breath_squared = breath * breath >> 8;
+	int32_t tint = (int32_t)lround(tint_at(t) * 256);
+
+	for (int y = 0; y < BOX_HEIGHT; y++) {
+		uint32_t *row = (uint32_t *)(map + (size_t)(top + y) * pitch) + left;
+		int first = whole ? 0 : span_first[y];
+		int last = whole ? BOX_WIDTH : span_last[y];
+		const struct term *term = terms + y * BOX_WIDTH;
+		for (int x = first; x < last; x++)
+			row[x] = compose_pixel(term + x, breath, breath_squared, tint);
+	}
 }
 
 static void compose(uint8_t *map, uint32_t pitch, int left, int top, double t)
 {
-	uint32_t breath = (uint32_t)lround(breath_at(t) * 256);
-	uint32_t tint = (uint32_t)lround(tint_at(t) * 256);
-
-	for (int y = 0; y < BOX_HEIGHT; y++) {
-		uint32_t *row = (uint32_t *)(map + (size_t)(top + y) * pitch) + left;
-		for (int x = 0; x < BOX_WIDTH; x++) {
-			int i = 4 * (y * BOX_WIDTH + x);
-			const uint8_t *halo = layers[HALO] + i;
-			const uint8_t *glow = layers[GLOW] + i;
-			const uint8_t *logo = layers[LOGO] + i;
-			const uint8_t *alt = layers[TINT] + i;
-			uint32_t glow_alpha = glow[3] * breath >> 8;
-			uint32_t alt_alpha = alt[3] * tint >> 8;
-			uint32_t rgb[3];
-			for (int channel = 0; channel < 3; channel++) {
-				uint32_t value = halo[channel] * breath >> 8;
-				value = over(glow[channel] * breath >> 8, glow_alpha, value);
-				value = over(logo[channel], logo[3], value);
-				value = over(alt[channel] * tint >> 8, alt_alpha, value);
-				rgb[channel] = value > 255 ? 255 : value;
-			}
-			row[x] = rgb[0] << 16 | rgb[1] << 8 | rgb[2];
-		}
-	}
+	compose_region(map, pitch, left, top, t, 0);
 }
 
 static int dump_frames(const char *directory, int count, int fps)
@@ -315,7 +370,7 @@ static int dump_frames(const char *directory, int count, int fps)
 		return 1;
 	for (int n = 0; n < count; n++) {
 		char path[512];
-		compose(map, pitch, (480 - BOX_WIDTH) / 2, (480 - BOX_HEIGHT) / 2, (double)n / fps);
+		compose_region(map, pitch, (480 - BOX_WIDTH) / 2, (480 - BOX_HEIGHT) / 2, (double)n / fps, n == 0);
 		snprintf(path, sizeof(path), "%s/frame-%04d.ppm", directory, n);
 		FILE *file = fopen(path, "wb");
 		if (!file)
@@ -579,7 +634,8 @@ static int run(int fps)
 	if (prepare_layers())
 		return 1;
 	double deadline = boot_seconds() + DEADLINE_SECONDS;
-	compose(display.buffers[0].map, display.buffers[0].pitch, left, top, boot_seconds());
+	for (int i = 0; i < 2; i++)
+		compose_region(display.buffers[i].map, display.buffers[i].pitch, left, top, boot_seconds(), 1);
 	struct drm_mode_crtc crtc = {
 		.crtc_id = display.crtc,
 		.fb_id = display.buffers[0].fb,
