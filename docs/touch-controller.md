@@ -356,3 +356,15 @@ Risks, highest first:
 - Vendor functions (addresses in the vendor `Image`): `cst2xx_check_code` `0xffffff80086b42f0`, `hard_reset_chip` `0xffffff80086b39fc`, `cst3xx_esd_check_func` `0xffffff80086b3f34`, `hyn_ts_probe` `0xffffff80086b4a10`
 - Measurements: `docs/performance.md` ("Touch controller report rate"), `docs/test-log.md`
 - Not obtained: Hynitron CST328 / CST340 / CST3240 datasheets and application manual (buydisplay.com refuses automated download)
+
+## Unpressed reports and false lifts (2026-11-27)
+
+A raw capture with the driver unbound (`tools/perf/captures/touch-raw-2026-11-27.txt` on branch `claude/project-thread-3bjdnn`: resting finger, slow circles, about 25 flicks, about 20 taps, 7 long presses) shows how the controller loses a finger:
+
+- Every real lift is one read with point count 1 and status 0 ("listed, not pressed"), then reads with point count 0.
+- While circling, the finger was lost 21 times in 27 s for 60–146 ms. 15 of these were a single unpressed read followed by the finger pressed again; the other 6 look exactly like a real lift (unpressed, then point count 0) and only differ in coming back within 150 ms.
+- New coordinates come only every 25–60 ms even though the controller interrupts about every 20 ms; the same position is repeated in between. After a false lift the controller often repeats its first position for 100–250 ms while the finger keeps moving, then jumps 60–100 px.
+
+The mainline driver drops a contact on any read where its status is not pressed, so all of these became lifts. `kernel/patches/0005-input-hynitron-cstxxx-keep-contact-across-unpressed-reports.patch` keeps an active contact, without a new position, for up to two consecutive unpressed reads: the 15 single-read false lifts disappear, and a real lift is reported one read (about 20 ms) later. Replaying the capture with `REPLAY_KEEP_UNPRESSED=1` (`buildroot/board/wallview/touch/wallview-touch-replay.c`) models the patch: raw touch-downs go from 81 to 65. The remaining false lifts cannot be told from real ones when they happen; `wallview-touch` can only bridge them by holding releases, which delays every real lift of a moving finger.
+
+Way back: drop the patch and rebuild, or boot the previous kernel.

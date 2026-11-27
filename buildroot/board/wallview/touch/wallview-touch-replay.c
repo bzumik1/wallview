@@ -19,7 +19,8 @@ static int out_slot;
 static int out_down;
 static int out_x, out_y;
 static int prev_x = -1, prev_y = -1;
-static double prev_step;
+static double prev_dx, prev_dy;
+static int have_prev_step;
 static int downs, ups, stalls, jerks, ticks;
 static double *errors;
 static int nerrors;
@@ -44,16 +45,36 @@ event(int64_t t, int type, int code, int value)
     handle_event(&e, &slot);
 }
 
+static struct raw *points;
+static int npoints;
+
+static void
+build_points(void)
+{
+    points = malloc(nraw * sizeof(points[0]));
+    for (int i = 0; i < nraw; i++) {
+        const struct raw *r = &raws[i];
+
+        if (!r->touch) {
+            points[npoints++] = *r;
+            continue;
+        }
+        if (npoints && points[npoints - 1].touch && points[npoints - 1].x == r->x && points[npoints - 1].y == r->y)
+            continue;
+        points[npoints++] = *r;
+    }
+}
+
 static int
 raw_position(int64_t t, double *x, double *y)
 {
-    for (int i = 1; i < nraw; i++) {
-        if (raws[i].time < t)
+    for (int i = 1; i < npoints; i++) {
+        if (points[i].time < t)
             continue;
-        const struct raw *a = &raws[i - 1];
-        const struct raw *b = &raws[i];
+        const struct raw *a = &points[i - 1];
+        const struct raw *b = &points[i];
 
-        if (!a->touch || !b->touch || b->time - a->time > 60 * NSEC_PER_MSEC || a->time > t)
+        if (!a->touch || !b->touch || b->time - a->time > 150 * NSEC_PER_MSEC || a->time > t)
             return 0;
         double f = b->time == a->time ? 1 : (double)(t - a->time) / (double)(b->time - a->time);
 
@@ -109,14 +130,17 @@ drain(int64_t t, int tick)
     }
     if (prev_x >= 0) {
         double step = sqrt((double)(out_x - prev_x) * (out_x - prev_x) + (double)(out_y - prev_y) * (out_y - prev_y));
+        double ax = (out_x - prev_x) - prev_dx, ay = (out_y - prev_y) - prev_dy;
 
         if (step > max_step)
             max_step = step;
-        if (fabs(step - prev_step) > 6)
+        if (have_prev_step && sqrt(ax * ax + ay * ay) > 6)
             jerks++;
-        prev_step = step;
+        prev_dx = out_x - prev_x;
+        prev_dy = out_y - prev_y;
+        have_prev_step = 1;
     } else {
-        prev_step = 0;
+        have_prev_step = 0;
     }
     prev_x = out_x;
     prev_y = out_y;
@@ -194,6 +218,7 @@ main(int argc, char **argv)
     FILE *f = argc > 1 ? fopen(argv[1], "r") : NULL;
     char line[256];
     int cap = 1 << 16;
+    int hold_status = getenv("REPLAY_KEEP_UNPRESSED") != NULL;
 
     if (!f) {
         fprintf(stderr, "usage: wallview-touch-replay <touchprobe capture>\n");
@@ -204,17 +229,24 @@ main(int argc, char **argv)
         unsigned long long start, end;
         unsigned count, id, x, y, extra;
 
+
         if (sscanf(line, "D %llu %llu %u %u %u %u %u", &start, &end, &count, &id, &x, &y, &extra) != 7)
             continue;
         if (nraw == cap)
             raws = realloc(raws, (cap *= 2) * sizeof(raws[0]));
-        raws[nraw++] = (struct raw){ (int64_t)start, count > 0, (int)y, (int)x };
+        if (count > 0 && id != 3 && hold_status && nraw && raws[nraw - 1].touch) {
+            raws[nraw] = raws[nraw - 1];
+            raws[nraw++].time = (int64_t)start;
+            continue;
+        }
+        raws[nraw++] = (struct raw){ (int64_t)start, count > 0 && id == 3, (int)y, (int)x };
     }
     fclose(f);
     if (!nraw) {
         fprintf(stderr, "wallview-touch-replay: no D lines\n");
         return 1;
     }
+    build_points();
     load_options(&options);
     opts = &options;
     period = options.period;
@@ -260,8 +292,8 @@ main(int argc, char **argv)
 
     printf("raw: %d reads, %d touch-downs, %d downs within 200 ms of an up\n", nraw, raw_strokes + (raws[0].touch ? 1 : 0), raw_short_gaps);
     printf("out: %d downs, %d ups, %d ticks while down\n", downs, ups, ticks);
-    printf("path error vs raw: p50 %.1f p95 %.1f max %.1f px\n", pct(errors, nerrors, .5), pct(errors, nerrors, .95), pct(errors, nerrors, 1));
-    printf("steps: max %.1f px, jerks (step change > 6 px) %d, stalls (finger moved, output did not) %d\n", max_step, jerks, stalls);
+    printf("path error vs raw change points: p50 %.1f p95 %.1f max %.1f px\n", pct(errors, nerrors, .5), pct(errors, nerrors, .95), pct(errors, nerrors, 1));
+    printf("steps: max %.1f px, jerks (acceleration > 6 px/tick^2) %d, stalls (finger moved, output did not) %d\n", max_step, jerks, stalls);
     printf("release after last touch sample: p50 %.0f p95 %.0f max %.0f ms\n", pct(release_delays, nrelease, .5), pct(release_delays, nrelease, .95), pct(release_delays, nrelease, 1));
     printf("tap release delay: n %d p50 %.0f max %.0f ms\n", ntap, pct(tap_delays, ntap, .5), pct(tap_delays, ntap, 1));
     return 0;

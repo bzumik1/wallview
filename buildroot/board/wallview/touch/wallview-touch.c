@@ -66,6 +66,7 @@ struct options {
     int hold_travel;
     int start_travel;
     double hold_speed;
+    double hold_max_speed;
     double start_speed;
     int64_t hold_recent;
     int64_t coast;
@@ -295,8 +296,9 @@ holds(int slot, int64_t time)
     const struct sample *last = &c->history[c->samples - 1];
     double speed = velocity(c, &c->vx, &c->vy);
     int age_ok = time - last->time <= opts->hold_recent;
-    int hold = age_ok && ((c->reach >= opts->start_travel && speed >= opts->start_speed) ||
-                          (c->moved && speed >= opts->hold_speed));
+    int hold = age_ok && (opts->hold_max_speed <= 0 || speed <= opts->hold_max_speed) &&
+               ((c->reach >= opts->start_travel && speed >= opts->start_speed) ||
+                (c->moved && speed >= opts->hold_speed));
 
     if (opts->debug) {
         const struct sample *s = c->history;
@@ -713,6 +715,7 @@ load_options(struct options *options)
         .hold_travel = (int)env_number("WALLVIEW_TOUCH_HOLD_TRAVEL_PX", 12),
         .start_travel = (int)env_number("WALLVIEW_TOUCH_START_TRAVEL_PX", 8),
         .hold_speed = env_number("WALLVIEW_TOUCH_HOLD_PX_PER_S", 60),
+        .hold_max_speed = env_number("WALLVIEW_TOUCH_HOLD_MAX_PX_PER_S", 0),
         .start_speed = env_number("WALLVIEW_TOUCH_START_PX_PER_S", 150),
         .hold_recent = env_ms("WALLVIEW_TOUCH_HOLD_RECENT_MS", 100),
         .coast = env_ms("WALLVIEW_TOUCH_COAST_MS", 40),

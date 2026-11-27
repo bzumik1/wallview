@@ -1,0 +1,56 @@
+diff --git a/drivers/input/touchscreen/hynitron_cstxxx.c b/drivers/input/touchscreen/hynitron_cstxxx.c
+index 3bbd17c..3f29307 100644
+--- a/drivers/input/touchscreen/hynitron_cstxxx.c
++++ b/drivers/input/touchscreen/hynitron_cstxxx.c
+@@ -41,6 +41,7 @@ struct hynitron_ts_data {
+ 	struct input_dev *input_dev;
+ 	struct touchscreen_properties prop;
+ 	struct gpio_desc *reset_gpio;
++	u8 unpressed[16];
+ };
+ 
+ /*
+@@ -48,6 +49,7 @@ struct hynitron_ts_data {
+  * based on observation and testing.
+  */
+ #define CST3XX_FIRMWARE_INFO_START_CMD		0x01d1
++#define CST3XX_MAX_UNPRESSED_FRAMES		2
+ #define CST3XX_FIRMWARE_INFO_END_CMD		0x09d1
+ #define CST3XX_FIRMWARE_CHK_CODE_REG		0xfcd1
+ #define CST3XX_FIRMWARE_VERSION_REG		0x08d2
+@@ -255,6 +257,20 @@ static void cst3xx_report_contact(struct hynitron_ts_data *ts_data,
+ 	input_report_abs(ts_data->input_dev, ABS_MT_TOUCH_MAJOR, w);
+ }
+ 
++static void cst3xx_keep_contact(struct hynitron_ts_data *ts_data, u8 id)
++{
++	struct input_mt *mt = ts_data->input_dev->mt;
++
++	if (!mt || id >= mt->num_slots || id >= ARRAY_SIZE(ts_data->unpressed) ||
++	    !input_mt_is_active(&mt->slots[id]) ||
++	    ts_data->unpressed[id] >= CST3XX_MAX_UNPRESSED_FRAMES)
++		return;
++
++	ts_data->unpressed[id]++;
++	input_mt_slot(ts_data->input_dev, id);
++	input_mt_report_slot_state(ts_data->input_dev, MT_TOOL_FINGER, true);
++}
++
+ static int cst3xx_finish_touch_read(struct i2c_client *client)
+ {
+ 	unsigned char buf[3];
+@@ -342,8 +358,13 @@ static void cst3xx_touch_report(struct i2c_client *client)
+ 		}
+ 
+ 		/* sw value of 0 means no touch, 0x03 means touch */
+-		if (sw == CST3XX_TOUCH_DATA_TOUCH_VAL)
++		if (sw == CST3XX_TOUCH_DATA_TOUCH_VAL) {
++			if (finger_id < ARRAY_SIZE(ts_data->unpressed))
++				ts_data->unpressed[finger_id] = 0;
+ 			cst3xx_report_contact(ts_data, finger_id, x, y, w);
++		} else {
++			cst3xx_keep_contact(ts_data, finger_id);
++		}
+ 
+ 		idx += 5;
+ 
