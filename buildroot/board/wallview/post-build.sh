@@ -41,6 +41,16 @@ mkdir -p "$EXTENSIONS"
 	"$BR2_EXTERNAL_WALLVIEW_PATH/board/wallview/kiosk-extension/wallview-kiosk.c" \
 	$("$HOST_DIR/bin/pkg-config" --cflags --libs wpe-web-process-extension-2.0)
 
+if "$HOST_DIR/bin/pkg-config" --exists wpe-platform-2.0; then
+	"$HOST_DIR/bin/$CROSS-gcc" -O2 -s -Wall -Wextra -Werror \
+		-o "$TARGET/usr/bin/wallview-browser" \
+		"$BR2_EXTERNAL_WALLVIEW_PATH/board/wallview/browser/wallview-browser.c" \
+		$("$HOST_DIR/bin/pkg-config" --cflags --libs wpe-webkit-2.0 wpe-platform-2.0)
+else
+	echo "post-build: WebKit has no WPE platform API, wallview-browser not built" >&2
+	rm -f "$TARGET/usr/bin/wallview-browser"
+fi
+
 CARGO=$HOME/.cargo/bin/cargo
 env -i HOME="$HOME" PATH=/usr/bin:/bin CARGO_TARGET_DIR="$HOME/build/agent-target" \
 	"$CARGO" build --release --locked --manifest-path "$WALLVIEW/agent/Cargo.toml"

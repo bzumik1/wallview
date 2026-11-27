@@ -20,15 +20,20 @@ kiosk_loop() {
 		pairing=$(cat /data/wallview/pairing 2>/dev/null)
 		rm -f /data/wallview/pairing
 		export LANG=$(cat /data/wallview/language 2>/dev/null || echo en_US.UTF-8)
-		cog --platform=drm --platform-params=renderer=gles --cookie-store=always --device-scale=1.5 \
-			--web-extensions-dir=/usr/lib/wallview/web-extensions \
-			--allow-file-access-from-file-urls=true --allow-universal-access-from-file-urls=true \
-			$extra "file:///usr/share/wallview/launcher.html?sign-in=$generation&pairing=$pairing#$url" >> /tmp/cog.log 2>&1
+		start="file:///usr/share/wallview/launcher.html?sign-in=$generation&pairing=$pairing#$url"
+		if [ -x /usr/bin/wallview-browser ] && [ "$(cat /data/wallview/browser 2>/dev/null)" != cog ]; then
+			WPE_DRM_SCALE=1.5 wallview-browser "$start" >> /tmp/cog.log 2>&1
+		else
+			cog --platform=drm --platform-params=renderer=gles --cookie-store=always --device-scale=1.5 \
+				--web-extensions-dir=/usr/lib/wallview/web-extensions \
+				--allow-file-access-from-file-urls=true --allow-universal-access-from-file-urls=true \
+				$extra "$start" >> /tmp/cog.log 2>&1
+		fi
 		sleep 2
 	done
 }
 
 case "$1" in
 start) kiosk_loop </dev/null >/dev/null 2>&1 & ;;
-stop) killall cog 2>/dev/null ;;
+stop) killall wallview-browser cog 2>/dev/null ;;
 esac

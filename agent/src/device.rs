@@ -105,7 +105,7 @@ impl Device {
     }
 
     pub fn restart_kiosk(&self) {
-        let _ = Command::new("killall").arg("cog").status();
+        let _ = Command::new("killall").args(["wallview-browser", "cog"]).status();
     }
 
     pub fn request_sign_in(&self) {
@@ -180,7 +180,7 @@ impl Device {
             return;
         }
         if fs::write(URL_FILE, format!("{url}\n")).is_ok() {
-            let _ = Command::new("killall").arg("cog").status();
+            self.restart_kiosk();
         }
     }
 }
