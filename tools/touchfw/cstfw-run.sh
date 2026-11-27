@@ -53,7 +53,7 @@ mkdir -p "$(dirname "$MARK")" && printf '%s\n' "$line" > "$MARK" && sync && [ "$
 		refuse "cannot write $MARK"
 	fi
 }
-echo "runner: marker written, driver bound=$bound, earlier failure=$had_mark" >> "$RUN/log"
+echo "runner: driver bound=$bound, earlier failure=$had_mark" >> "$RUN/log"
 
 agent_pids=
 for pid in $(cat "$PIDS" 2>/dev/null) $(pidof wallview-agent 2>/dev/null); do

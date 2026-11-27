@@ -144,7 +144,7 @@ esac
 tk=0
 if [ "$CMD" = recover ]; then
 	$SSH "$PANEL" "R=$R; $LIVE
-		command -v readlink > /dev/null || exit 1
+		command -v readlink > /dev/null || { echo 'readlink missing on the panel' >&2; exit 3; }
 		[ \"\$(cat $LOCK/owner 2>/dev/null)\" = '$RUNNER_OWNER' ] || exit 1
 		if [ -d \$R ] && live; then exit 1; fi
 		now=\$(cut -d. -f1 /proc/uptime)
@@ -157,8 +157,9 @@ if [ "$CMD" = recover ]; then
 			rm -rf $LOCK/old.$TOKEN $LOCK/\$t
 		fi
 		mkdir $LOCK/tk.$TOKEN && echo \$now > $LOCK/tk.$TOKEN/at || { rm -rf $LOCK/tk.$TOKEN; exit 1; }
-		ln -s tk.$TOKEN $TK || { rm -rf $LOCK/tk.$TOKEN; exit 1; }
+		ln -sn tk.$TOKEN $TK || { rm -rf $LOCK/tk.$TOKEN; exit 1; }
 		date '+%Y-%m-%dT%H:%M:%S%z' > $LOCK/since" && took_over=1 || tk=$?
+	[ "$tk" = 3 ] && exit 3
 	if [ "$took_over" = 1 ]; then
 		echo "taking over the lock kept by an earlier flash run"
 	elif [ "$tk" = 255 ]; then
@@ -207,13 +208,14 @@ flash | recover)
 	[ "$CMD" = flash ] && ARG=$4
 	$SSH "$PANEL" "command -v setsid > /dev/null || { echo 'setsid missing on the panel' >&2; exit 3; }
 		mkdir $R || exit 1
-		cut -d. -f1 /proc/uptime > $R/started && [ -s $R/started ] || { rm -rf $R; exit 1; }" || { echo "could not claim $R on the panel" >&2; exit 1; }
+		echo $TOKEN > $R/claim && cut -d. -f1 /proc/uptime > $R/started && [ -s $R/started ] || { rm -rf $R; exit 1; }" || { echo "could not claim $R on the panel" >&2; exit 1; }
 	refresh() {
 		[ "$took_over" = 1 ] || return 0
-		$SSH "$PANEL" "$MINE && cut -d. -f1 /proc/uptime > $LOCK/tk.$TOKEN/at"
+		$SSH "$PANEL" "$MINE && cut -d. -f1 /proc/uptime > $LOCK/tk.$TOKEN/at.tmp && mv $LOCK/tk.$TOKEN/at.tmp $LOCK/tk.$TOKEN/at"
 	}
 	if ! { put "$OUT" "$R/cstfw" && refresh && put "$HERE/cstfw-run.sh" "$R/cstfw-run.sh" && refresh && put "$3" "$R/image.bin" && refresh; }; then
-		$SSH "$PANEL" "rm -rf $R" || true
+		if [ "$took_over" = 1 ]; then OK_MINE="$MINE"; else OK_MINE=true; fi
+		$SSH "$PANEL" "$OK_MINE && [ \"\$(cat $R/claim 2>/dev/null)\" = $TOKEN ] && rm -rf $R" || true
 		exit 1
 	fi
 	if [ "$took_over" = 1 ]; then
@@ -221,7 +223,7 @@ flash | recover)
 	else
 		HAND="date '+%Y-%m-%dT%H:%M:%S%z' > $LOCK/since && printf '%s\n' '$RUNNER_OWNER' > $LOCK/owner || exit 1"
 	fi
-	$SSH "$PANEL" "chmod +x $R/cstfw && cut -d. -f1 /proc/uptime > $R/started || exit 1
+	$SSH "$PANEL" "[ \"\$(cat $R/claim 2>/dev/null)\" = $TOKEN ] && chmod +x $R/cstfw && cut -d. -f1 /proc/uptime > $R/started || exit 1
 		$HAND
 		setsid sh $R/cstfw-run.sh '$ARG' < /dev/null > /dev/null 2>&1 &" && hs=0 || hs=$?
 	case "$hs" in
