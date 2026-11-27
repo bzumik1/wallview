@@ -36,6 +36,7 @@ The panel identifies itself honestly: manufacturer "WallView", model "Sonoff NSP
 | Dashboard URL | text, config | `/data/wallview/url`, the kiosk restarts with the new URL |
 | Radio mode | select, config | `/data/wallview/radio-mode`: Off (default) or Zigbee coordinator, see [Zigbee and Thread](#zigbee-and-thread) |
 | Radio client connected | binary sensor (connectivity), diagnostic | a host (ZHA, Zigbee2MQTT) is connected to the radio |
+| Bluetooth proxy | switch, config | `/data/wallview/bluetooth-proxy`: off (default) or on, see [Bluetooth proxy](#bluetooth-proxy) |
 
 Presence changes are sent immediately, sensors every 15 s, commands answer with the new state.
 
@@ -56,6 +57,20 @@ The bridge serves one host at a time and refuses further connections while it is
 - Over Wi-Fi, a stall of several seconds makes bellows reset the ASH connection; ZHA reconnects by itself.
 
 Tested 2026-11-27 in the build VM against a pseudo terminal that answers like the panel's NCP (`WALLVIEW_RADIO_SERIAL` overrides the UART path): ASH reset answered through the bridge, a second host refused while the first is connected and accepted after it left, select and sensor states with aioesphomeapi, mDNS record with `radio_type=ezsp` and `serial_number`. Not yet tested on the panel with ZHA.
+
+## Bluetooth proxy
+
+The panel can be an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy/): with the **Bluetooth proxy** switch on, Home Assistant receives the BLE advertisements the panel hears, as from an ESP32 proxy (BTHome, Xiaomi, Shelly BLU and Govee sensors, room presence with Bermuda or Private BLE Device, Improv for other devices). Active connections (SwitchBot, locks) are not supported yet.
+
+Bluetooth is off unless something needs it: with the switch off and Wi-Fi working, the agent powers the adapter down and soft-blocks it with rfkill, so the RTL8723DS, which shares its antenna with Wi-Fi, neither transmits nor listens. Improv turns it on by itself when there is no Wi-Fi and off again after provisioning; without Wi-Fi Bluetooth always comes on for Improv, so the switch cannot lock the panel out.
+
+How it works (`agent/src/bluetooth/`):
+- One owner decides the adapter's power from the holds (Improv) and the switch, and scans only while the switch is on and Home Assistant is subscribed to advertisements.
+- Scanning is passive: a BlueZ advertisement monitor matching the usual flags values (as Home Assistant does on Linux), which also turns off the controller's duplicate filter, so every advertisement is reported. Without the monitor API (BlueZ without experimental interfaces) the agent falls back to BlueZ discovery (active scanning, duplicates on). `/etc/bluetooth/main.conf` turns on the experimental interfaces and sets a scan window of 30 ms every 320 ms (ESPHome's default), to leave the shared antenna to Wi-Fi most of the time.
+- The raw advertisement data (address, address type, RSSI, up to 62 bytes cut at an AD structure) comes from the kernel's management socket (`Device Found` and `Advertisement Monitor Device Found` events), because BlueZ's D-Bus API only offers parsed and merged device properties. It is sent to Home Assistant in batches of up to 16 every 100 ms (`BluetoothLERawAdvertisementsResponse`); a subscriber that falls more than 256 advertisements behind loses the newest ones.
+- The device info reports the proxy features (passive scan, raw advertisements) and the adapter's address only while the switch is on; switching closes the API connection so Home Assistant reconnects and reads them again.
+
+Not yet tested on the panel; to measure before the switch is recommended: Wi-Fi latency and dashboard frame rate with the switch off and on.
 
 ## Protocol details
 
