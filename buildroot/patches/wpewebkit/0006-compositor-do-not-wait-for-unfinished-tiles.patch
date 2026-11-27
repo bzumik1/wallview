@@ -1,0 +1,279 @@
+From: WallView
+Subject: [PATCH] Coordinated graphics: do not block the compositor on tiles
+ that are still being painted
+
+CoordinatedPlatformLayer::flushCompositingState() took the pending
+backing store update of a layer and CoordinatedBackingStoreTile then
+waited for every tile buffer that was not finished: for the painting
+thread (waitUntilPaintingComplete()) and for the GPU (serverWait() on
+the fence of the tile). While scrolling a Home Assistant dashboard on the
+NSPanel every main thread commit with new tiles stopped the compositor
+for 4-50 ms, so the frames with the new scroll position missed their
+vblank.
+
+Leave the pending update of a layer in its proxy while one of its tile
+buffers is not painted or its fence has not signaled, compose the frame
+with the tiles the layer already has and schedule another composition.
+The update of a layer is still applied as a whole, and after two
+deferred frames the compositor waits as before, so content cannot be
+starved by continuous repaints. Pending damage is kept with the deferred
+update.
+
+WALLVIEW_WEBKIT_TILE_DEFER=<frames> sets the limit of deferred frames
+(default 2); 0 waits for every tile as before, for A/B measurements.
+
+Upstream-Status: Pending
+---
+--- a/Source/WebCore/platform/graphics/egl/GLFence.h
++++ b/Source/WebCore/platform/graphics/egl/GLFence.h
+@@ -43,6 +43,7 @@
+ 
+     virtual void clientWait() = 0;
+     virtual void serverWait() = 0;
++    virtual bool isSignaled() { return true; }
+ #if OS(UNIX)
+     virtual WTF::UnixFileDescriptor exportFD() { return { }; }
+ #endif
+--- a/Source/WebCore/platform/graphics/egl/GLFenceEGL.h
++++ b/Source/WebCore/platform/graphics/egl/GLFenceEGL.h
+@@ -41,6 +41,7 @@
+ private:
+     void clientWait() override;
+     void serverWait() override;
++    bool isSignaled() override;
+ #if OS(UNIX)
+     WTF::UnixFileDescriptor exportFD() override;
+ #endif
+--- a/Source/WebCore/platform/graphics/egl/GLFenceEGL.cpp
++++ b/Source/WebCore/platform/graphics/egl/GLFenceEGL.cpp
+@@ -112,6 +112,17 @@
+         eglClientWaitSyncKHR(display->eglDisplay(), m_sync, 0, EGL_FOREVER_KHR);
+ }
+ 
++bool GLFenceEGL::isSignaled()
++{
++    auto display = m_display.get();
++    if (!display)
++        return true;
++
++    if (display->checkVersion(1, 5))
++        return eglClientWaitSync(display->eglDisplay(), m_sync, 0, 0) != EGL_TIMEOUT_EXPIRED;
++    return eglClientWaitSyncKHR(display->eglDisplay(), m_sync, 0, 0) != EGL_TIMEOUT_EXPIRED_KHR;
++}
++
+ void GLFenceEGL::serverWait()
+ {
+     auto display = m_display.get();
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.h
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.h
+@@ -67,6 +67,7 @@
+     virtual void beginPainting();
+     virtual void completePainting();
+     void waitUntilPaintingComplete();
++    virtual bool isPaintingComplete();
+ 
+ #if USE(SKIA)
+     SkCanvas* canvas();
+@@ -156,6 +157,7 @@
+ 
+     bool tryEnsureSurface() final;
+     void completePainting() final;
++    bool isPaintingComplete() final;
+ 
+     const Ref<BitmapTexture> m_texture;
+     std::unique_ptr<GLFence> m_fence;
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.cpp
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedTileBuffer.cpp
+@@ -116,6 +116,12 @@
+     });
+ }
+ 
++bool CoordinatedTileBuffer::isPaintingComplete()
++{
++    Locker locker { m_painting.lock };
++    return m_painting.state == PaintingState::Complete;
++}
++
+ Ref<CoordinatedTileBuffer> CoordinatedUnacceleratedTileBuffer::create(const IntSize& size, Flags flags)
+ {
+     return adoptRef(*new CoordinatedUnacceleratedTileBuffer(size, flags));
+@@ -233,6 +239,11 @@
+     CoordinatedTileBuffer::completePainting();
+ }
+ 
++bool CoordinatedAcceleratedTileBuffer::isPaintingComplete()
++{
++    return CoordinatedTileBuffer::isPaintingComplete() && (!m_fence || m_fence->isSignaled());
++}
++
+ void CoordinatedAcceleratedTileBuffer::serverWait()
+ {
+     if (!m_fence)
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedBackingStoreProxy.h
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedBackingStoreProxy.h
+@@ -65,6 +65,7 @@
+ 
+         void appendUpdate(Vector<uint32_t>&&, Vector<TileUpdate>&&, Vector<uint32_t>&&);
+         void waitUntilPaintingComplete();
++        bool isPaintingComplete() const;
+ 
+     private:
+         Vector<uint32_t> m_tilesToCreate;
+@@ -79,6 +80,7 @@
+     };
+     OptionSet<UpdateResult> updateIfNeeded(const IntRect& unscaledVisibleRect, const IntRect& unscaledContentsRect, bool shouldCreateAndDestroyTiles, const Vector<IntRect, 1>&, CoordinatedPlatformLayer&);
+     Update takePendingUpdate();
++    bool isPendingUpdatePaintingComplete();
+ 
+     void waitUntilPaintingComplete();
+ 
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedBackingStoreProxy.cpp
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedBackingStoreProxy.cpp
+@@ -90,6 +90,15 @@
+         update.buffer->waitUntilPaintingComplete();
+ }
+ 
++bool CoordinatedBackingStoreProxy::Update::isPaintingComplete() const
++{
++    for (auto& update : m_tilesToUpdate) {
++        if (!update.buffer->isPaintingComplete())
++            return false;
++    }
++    return true;
++}
++
+ Ref<CoordinatedBackingStoreProxy> CoordinatedBackingStoreProxy::create(float contentsScale, std::optional<IntSize> tileSize)
+ {
+     return adoptRef(*new CoordinatedBackingStoreProxy(contentsScale, tileSize.value_or(IntSize { s_defaultTileDimension, s_defaultTileDimension })));
+@@ -437,6 +446,12 @@
+     return WTFMove(m_update.pending);
+ }
+ 
++bool CoordinatedBackingStoreProxy::isPendingUpdatePaintingComplete()
++{
++    Locker locker { m_update.lock };
++    return m_update.pending.isPaintingComplete();
++}
++
+ IntRect CoordinatedBackingStoreProxy::mapToContents(const IntRect& rect) const
+ {
+     return enclosingIntRect(FloatRect(rect.x() / m_contentsScale,
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.h
+@@ -175,7 +175,8 @@
+     void updateContents(bool affectedByTransformAnimation);
+     void updateBackingStore();
+ 
+-    void flushCompositingState(TextureMapper&);
++    enum class CanDeferBackingStoreUpdate : bool { No, Yes };
++    bool flushCompositingState(TextureMapper&, CanDeferBackingStoreUpdate = CanDeferBackingStoreUpdate::No);
+ 
+     bool hasPendingTilesCreation() const { return m_pendingTilesCreation; }
+     bool isCompositionRequiredOrOngoing() const;
+@@ -277,6 +278,7 @@
+     float m_contentsScale WTF_GUARDED_BY_LOCK(m_lock) { 1. };
+     RefPtr<CoordinatedBackingStoreProxy> m_backingStoreProxy WTF_GUARDED_BY_LOCK(m_lock);
+     RefPtr<CoordinatedBackingStore> m_backingStore WTF_GUARDED_BY_LOCK(m_lock);
++    unsigned m_deferredBackingStoreUpdates WTF_GUARDED_BY_LOCK(m_lock) { 0 };
+     RefPtr<CoordinatedAnimatedBackingStoreClient> m_animatedBackingStoreClient WTF_GUARDED_BY_LOCK(m_lock);
+     struct {
+         RefPtr<CoordinatedImageBackingStore> current;
+--- a/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp
++++ b/Source/WebCore/platform/graphics/texmap/coordinated/CoordinatedPlatformLayer.cpp
+@@ -847,12 +847,21 @@
+         m_backingStoreProxy->waitUntilPaintingComplete();
+ }
+ 
+-void CoordinatedPlatformLayer::flushCompositingState(TextureMapper& textureMapper)
++bool CoordinatedPlatformLayer::flushCompositingState(TextureMapper& textureMapper, CanDeferBackingStoreUpdate canDeferBackingStoreUpdate)
+ {
+     ASSERT(!isMainThread());
+     Locker locker { m_lock };
+     if (m_pendingChanges.isEmpty() && !m_backingStoreProxy)
+-        return;
++        return false;
++
++    static unsigned maxDeferredBackingStoreUpdates = getenv("WALLVIEW_WEBKIT_TILE_DEFER") ? atoi(getenv("WALLVIEW_WEBKIT_TILE_DEFER")) : 2;
++    bool deferBackingStoreUpdate = canDeferBackingStoreUpdate == CanDeferBackingStoreUpdate::Yes
++        && m_backingStoreProxy
++        && m_backingStore
++        && !m_pendingChanges.contains(Change::BackingStore)
++        && m_deferredBackingStoreUpdates < maxDeferredBackingStoreUpdates
++        && !m_backingStoreProxy->isPendingUpdatePaintingComplete();
++    m_deferredBackingStoreUpdates = deferBackingStoreUpdate ? m_deferredBackingStoreUpdates + 1 : 0;
+ 
+     auto& layer = ensureTarget();
+     if (m_pendingChanges.contains(Change::Position))
+@@ -930,7 +939,8 @@
+         layer.setSolidColor(m_contentsColor);
+ 
+ #if ENABLE(DAMAGE_TRACKING)
+-    if (m_pendingChanges.contains(Change::Damage)) {
++    bool deferDamage = deferBackingStoreUpdate && m_pendingChanges.contains(Change::Damage);
++    if (m_pendingChanges.contains(Change::Damage) && !deferDamage) {
+         ASSERT(m_damage.has_value());
+         layer.setDamage(*std::exchange(m_damage, std::nullopt));
+     }
+@@ -969,7 +979,7 @@
+         }));
+     }
+ 
+-    if (m_backingStoreProxy) {
++    if (m_backingStoreProxy && !deferBackingStoreUpdate) {
+         m_backingStore->resize(layer.size(), m_contentsScale);
+ 
+         auto update = m_backingStoreProxy->takePendingUpdate();
+@@ -991,6 +1001,11 @@
+         layer.setContentsLayer(nullptr);
+ 
+     m_pendingChanges = { };
++#if ENABLE(DAMAGE_TRACKING)
++    if (deferDamage)
++        m_pendingChanges.add(Change::Damage);
++#endif
++    return deferBackingStoreUpdate;
+ }
+ 
+ } // namespace WebCore
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.h
+@@ -108,7 +108,8 @@
+     ThreadedCompositor(LayerTreeHost&, ThreadedDisplayRefreshMonitor::Client&, WebCore::PlatformDisplayID);
+ #endif
+ 
+-    void updateSceneState();
++    enum class CanDeferBackingStoreUpdates : bool { No, Yes };
++    void updateSceneState(CanDeferBackingStoreUpdates = CanDeferBackingStoreUpdates::No);
+     void renderLayerTree();
+     void paintToCurrentGLContext(const WebCore::TransformationMatrix&, const WebCore::IntSize&);
+     void frameComplete();
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/ThreadedCompositor.cpp
+@@ -243,19 +243,23 @@
+ }
+ #endif
+ 
+-void ThreadedCompositor::updateSceneState()
++void ThreadedCompositor::updateSceneState(CanDeferBackingStoreUpdates canDeferBackingStoreUpdates)
+ {
+     if (!m_textureMapper)
+         m_textureMapper = TextureMapper::create();
+ 
+-    m_sceneState->rootLayer().flushCompositingState(*m_textureMapper);
++    auto canDefer = canDeferBackingStoreUpdates == CanDeferBackingStoreUpdates::Yes ? CoordinatedPlatformLayer::CanDeferBackingStoreUpdate::Yes : CoordinatedPlatformLayer::CanDeferBackingStoreUpdate::No;
++    bool hasDeferredBackingStoreUpdates = m_sceneState->rootLayer().flushCompositingState(*m_textureMapper, canDefer);
+     for (auto& layer : m_sceneState->committedLayers())
+-        layer->flushCompositingState(*m_textureMapper);
++        hasDeferredBackingStoreUpdates |= layer->flushCompositingState(*m_textureMapper, canDefer);
++
++    if (hasDeferredBackingStoreUpdates)
++        scheduleUpdate();
+ }
+ 
+ void ThreadedCompositor::paintToCurrentGLContext(const TransformationMatrix& matrix, const IntSize& size)
+ {
+-    updateSceneState();
++    updateSceneState(CanDeferBackingStoreUpdates::Yes);
+ 
+     FloatRect clipRect(FloatPoint { }, size);
+     TextureMapperLayer& currentRootLayer = m_sceneState->rootLayer().ensureTarget();

@@ -1,0 +1,80 @@
+From: WallView
+Subject: [PATCH] Run the compositor, the tile painting workers and the DRM
+ vblank observer as real-time threads
+
+The scrolling thread and the IPC queues already run with SCHED_RR
+(Thread::QOS::UserInteractive, RealTimeThreads), but the threads that
+turn their work into a frame did not: ThreadedCompositor, the Skia
+painting workers the compositor waits for, and WPEScreenSyncObserverDRM,
+which starts every frame by delivering the display refresh to the
+DisplayLink. On the NSPanel (4 cores, HZ=250, web process main thread at
+100 % while scrolling a Home Assistant dashboard) they were woken up to
+7 ms late, which is most of the time left before the next vblank.
+
+WorkerPool has no QoS parameter, so the painting workers register
+themselves with RealTimeThreads when they run their first task.
+
+The vblank thread is destroyed 30 s after the display link stops and
+created again on the next start; registering it with RealTimeThreads
+from the UI process left it at SCHED_OTHER on the panel, so it sets
+SCHED_RR itself when it starts.
+
+Upstream-Status: Pending
+---
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/CompositingRunLoop.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/CompositingRunLoop.cpp
+@@ -43,7 +43,7 @@
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(CompositingRunLoop);
+ 
+ CompositingRunLoop::CompositingRunLoop(Function<void ()>&& updateFunction)
+-    : m_runLoop(RunLoop::create("org.webkit.ThreadedCompositor"_s, ThreadType::Graphics))
++    : m_runLoop(RunLoop::create("org.webkit.ThreadedCompositor"_s, ThreadType::Graphics, Thread::QOS::UserInteractive))
+     , m_updateTimer(m_runLoop.get(), "CompositingRunLoop::UpdateTimer"_s, this, &CompositingRunLoop::updateTimerFired)
+     , m_updateFunction(WTFMove(updateFunction))
+ {
+--- a/Source/WebKit/WPEPlatform/wpe/WPEScreenSyncObserverDRM.cpp
++++ b/Source/WebKit/WPEPlatform/wpe/WPEScreenSyncObserverDRM.cpp
+@@ -29,6 +29,7 @@
+ #include <chrono>
+ #include <errno.h>
+ #include <fcntl.h>
++#include <sched.h>
+ #include <thread>
+ #include <wtf/Condition.h>
+ #include <wtf/Function.h>
+@@ -109,6 +110,9 @@
+     if (!priv->thread) {
+         priv->thread = Thread::create("WPEScreenSyncObserverDRM"_s, [observer] {
+             auto* priv = WPE_SCREEN_SYNC_OBSERVER_DRM(observer)->priv;
++            struct sched_param param = { };
++            param.sched_priority = 5;
++            sched_setscheduler(0, SCHED_RR | SCHED_RESET_ON_FORK, &param);
+             while (true) {
+                 {
+                     Locker locker { priv->lock };
+--- a/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.cpp
++++ b/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.cpp
+@@ -45,6 +45,10 @@
+ #include <wtf/SystemTracing.h>
+ #include <wtf/text/StringToIntegerConversion.h>
+ 
++#if OS(LINUX)
++#include <wtf/linux/RealTimeThreads.h>
++#endif
++
+ namespace WebCore {
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(SkiaPaintingEngine);
+@@ -268,6 +272,12 @@
+ 
+     auto& workerPool = renderingMode == RenderingMode::Accelerated ? *m_gpuWorkerPool.get() : *m_cpuWorkerPool.get();
+     workerPool.postTask([buffer = Ref { buffer }, dirtyRect, recording = RefPtr { recording }]() mutable {
++#if OS(LINUX)
++        static thread_local bool isRegisteredAsRealTimeThread = false;
++        if (!std::exchange(isRegisteredAsRealTimeThread, true))
++            RealTimeThreads::singleton().registerThread(Thread::currentSingleton());
++#endif
++
+         auto* canvas = buffer->canvas();
+         if (!canvas) {
+             buffer->completePainting();

@@ -1,8 +1,12 @@
+#define _GNU_SOURCE
+#include <errno.h>
 #include <glib-unix.h>
+#include <sched.h>
 #include <wpe/webkit.h>
 #include <wpe/wpe-platform.h>
 
 #define RELOAD_DELAY_SECONDS 2
+#define REALTIME_PRIORITY 5
 
 typedef struct {
     GMainLoop *loop;
@@ -33,6 +37,15 @@ web_process_terminated(G_GNUC_UNUSED WebKitWebView *view, WebKitWebProcessTermin
 {
     g_warning("Web process terminated (reason %d), reloading", reason);
     g_timeout_add_seconds(RELOAD_DELAY_SECONDS, reload, user_data);
+}
+
+static void
+use_realtime_scheduling(void)
+{
+    struct sched_param param = { .sched_priority = REALTIME_PRIORITY };
+
+    if (sched_setscheduler(0, SCHED_RR | SCHED_RESET_ON_FORK, &param) != 0)
+        g_warning("Real-time scheduling not available: %s", g_strerror(errno));
 }
 
 static WebKitNetworkSession *
@@ -74,6 +87,7 @@ main(int argc, char **argv)
         return 2;
     }
 
+    use_realtime_scheduling();
     browser.uri = argv[1];
     browser.loop = g_main_loop_new(NULL, FALSE);
     context = webkit_web_context_new();

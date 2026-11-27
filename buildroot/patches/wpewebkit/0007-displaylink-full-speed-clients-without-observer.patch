@@ -1,0 +1,64 @@
+From: WallView
+Subject: [PATCH] DisplayLink: serve full speed clients that have no observer
+
+A page asks for full speed display updates while it receives wheel
+events, so that the scrolling thread gets EventDispatcher::DisplayDidRefresh
+for every frame. incrementFullSpeedRequestClientCount() only counted the
+request: it did not start a stopped display link, and
+notifyObserversDisplayDidRefresh() skipped every client without an
+observer. Observers are added by the main thread of the web process when
+it schedules a rendering update, so the first frame of a scroll gesture
+waited for the main thread (250-420 ms after touch down on a page whose
+script was busy for 400 ms), although the wheel events were already
+handled by the scrolling thread.
+
+Start the display link for a full speed request and notify clients that
+only have a full speed request.
+
+Upstream-Status: Pending
+---
+--- a/Source/WebKit/UIProcess/DisplayLink.cpp
++++ b/Source/WebKit/UIProcess/DisplayLink.cpp
+@@ -135,13 +135,20 @@
+ 
+ void DisplayLink::incrementFullSpeedRequestClientCount(Client& client)
+ {
+-    Locker locker { m_clientsLock };
+-
+-    auto& clientInfo = m_clients.ensure(client, [] {
+-        return ClientInfo { };
+-    }).iterator->value;
++    {
++        Locker locker { m_clientsLock };
+ 
+-    ++clientInfo.fullSpeedUpdatesClientCount;
++        auto& clientInfo = m_clients.ensure(client, [] {
++            return ClientInfo { };
++        }).iterator->value;
++
++        ++clientInfo.fullSpeedUpdatesClientCount;
++    }
++
++    if (!platformIsRunning()) {
++        m_currentUpdate = { 0, m_displayNominalFramesPerSecond };
++        platformStart();
++    }
+ }
+ 
+ void DisplayLink::decrementFullSpeedRequestClientCount(Client& client)
+@@ -199,13 +206,13 @@
+ 
+     bool anyConnectionHadObservers = false;
+     for (auto& [client, clientInfo] : m_clients) {
+-        if (clientInfo.observers.isEmpty())
++        if (clientInfo.observers.isEmpty() && !clientInfo.fullSpeedUpdatesClientCount)
+             continue;
+ 
+         anyConnectionHadObservers = true;
+ 
+         auto observersMaxFramesPerSecond = maxFramesPerSecond(clientInfo.observers);
+-        bool anyObserverWantsCallback = m_currentUpdate.relevantForUpdateFrequency(observersMaxFramesPerSecond.value_or(FullSpeedFramesPerSecond));
++        bool anyObserverWantsCallback = !clientInfo.observers.isEmpty() && m_currentUpdate.relevantForUpdateFrequency(observersMaxFramesPerSecond.value_or(FullSpeedFramesPerSecond));
+ 
+         LOG_WITH_STREAM(DisplayLink, stream << "[UI ] DisplayLink " << this << " for display " << m_displayID << " (display fps " << m_displayNominalFramesPerSecond << ") update " << m_currentUpdate << " " << clientInfo.observers.size()
+             << " observers, maxFramesPerSecond " << observersMaxFramesPerSecond << " full speed client count " << clientInfo.fullSpeedUpdatesClientCount << " relevant " << anyObserverWantsCallback);

@@ -124,10 +124,76 @@ Neither engine holds 60 fps yet; Chromium is close because touch scrolling runs 
 
 Measured on the panel with real touch drags (expert analysis, Cog/libwpe): the display got 18.7 new frames/s with stalls up to 1.27 s; the main thread was 93 % busy, 36 % hit testing (touch moves and wheel events, the latter because Home Assistant has a passive `wheel` listener on `document`), 36 % Home Assistant's websocket handling. Programmatic `scrollTop` scrolling (the in-page probe) takes a more expensive path (`updateCompositingLayers(OnScroll)`, 28 %) that touch scrolling does not, so it overstated the gap to Chromium. The climate view's 13 fps was a cold start; in steady state WebKit gives 40–50 fps there. The main thread runs at an IPC of 0.14 and is memory bound (DRAM miss about 340 cycles), so `-O3` is not expected to help; less memory traffic does.
 
+## Why touch scrolling misses frames (WebKit 2.50.5, WPEPlatform DRM, 2026-11-27)
+
+Method: `perf record -e cpu-clock --switch-events -k CLOCK_MONOTONIC -t <tids>` on the web process main, scrolling, compositor, `EventDispatcher`, IPC and Skia threads and on the UI process main and vblank threads while `touchplay` swipes, together with the `flipmon` vblank times (`tools/perf/threadtrace.sh`, run on the panel as `/tmp/cap.sh > capture.txt`; it picks the web process whose compositor thread has used the most CPU). The context switches give a per-thread timeline (when each thread runs and for how long, symbolised leaf samples say what it does) that is laid over every vblank without a new frame: `tools/perf/threadtrace.py <unstripped libWPEWebKit> capture.txt misses`, or `window <from> <to>` for any interval. The kernel has no ftrace/uprobes, so this is the finest view available without rebuilding. Two measurement caveats:
+
+- `flipmon` sees the new `fb_id` as soon as the atomic commit ioctl returns, not when the frame is latched (WPEPlatform commits non-blocking with `IN_FENCE_FD`). A frame that is committed too late is therefore still counted at its vblank, and the miss shows up one vblank later, when the compositor is still waiting for the page-flip event. The number of frames is right, the attribution is one frame late.
+- On Home Assistant views the `missed` value of `touchtest.py` also counts a dashboard update that happens after the scroll has stopped as one long gap. For A/B runs count instead the vblanks without a new frame from 100 ms after touch down to 150 ms after release (18 vblanks per swipe, the content has to move in every one of them); configurations are compared interleaved in the same browser session where possible, because the level drifts between sessions (9–17 % on the same build).
+
+One frame on the climate view needs about 1 ms from vblank to the scrolling thread, 6–7 ms of compositor CPU, 4–5 ms for the GPU and the DRM commit, i.e. 12–13 ms of the 16.7 ms. Any wait of a few milliseconds in that chain loses the frame.
+
+Four independent causes, in the order of a swipe:
+
+1. **The first scroll frame waits for the main thread.** `WebPageProxy::updateDisplayLinkFrequency()` asks for full-speed display updates as soon as wheel events arrive, but `DisplayLink::incrementFullSpeedRequestClientCount()` only counts the request (it does not start a stopped link) and `DisplayLink::notifyObserversDisplayDidRefresh()` skips every client without an observer. Observers are added by the web process main thread when it schedules a rendering update, so `ThreadedScrollingTree::displayDidRefresh()` is not called before that. Timeline on a page with a 400 ms busy loop: wheel events reach the scrolling thread 17 ms after touch down and every 8 ms from then on, the compositor draws nothing until the main thread is free (first frame after 250–420 ms). Fix: patch `0007`.
+2. **The scrolling thread does not commit while the main thread is busy.** `ThreadedScrollingTree::displayDidRefreshOnScrollingThread()` applies layer positions only when `m_state != Idle`; in `Idle` it arms the 1 ms desynchronisation timer only if `m_renderingUpdateWasScheduled`, which the main thread sets in `Page::didScheduleRenderingUpdate()`. A kinetic scroll moves in `serviceScrollAnimations()` at the display refresh and the main thread clears the flag in `willStartRenderingUpdate()`, so a main-thread task that starts between two rendering updates stops all scroll frames until it ends: the scrolling thread still runs at every vblank and handles wheel events, the compositor stays idle. Wheel events, their replies (`EventDispatcher::internalWheelEvent()` answers from the scrolling thread) and the gesture recognition in the UI process (`ViewPlatform::handleGesture()` runs beside `handleTouchEvent()`, it does not wait for the page) do not depend on the main thread. Fix: patch `0004` (apply layer positions on every display refresh). Checked on the panel with a copy of the library in `/tmp` in which the one conditional branch is replaced (`LD_LIBRARY_PATH`): page with a 40 ms busy loop every 150 ms 13–19 missed frames per 8 swipes → 0, with a 400 ms loop → 0, static page unchanged at 60.
+3. **The compositor waits for tile painting.** `CoordinatedPlatformLayer::flushCompositingState()` takes the pending backing store update and `CoordinatedBackingStoreTile::processPendingUpdates()` calls `waitUntilPaintingComplete()` and `serverWait()` (EGL fence) for every tile buffer. On the Home Assistant views the compositor thread wakes at the vblank, sleeps 4–55 ms while both `SkiaGPUWorker` threads run and then needs up to 25 ms for the texture updates. The largest burst comes right after touch down (the page repaints the pressed card), smaller ones whenever the main thread commits new tiles; during a drag the result is a frame only every other vblank. This is the largest cause on the Home Assistant views. Fix: patch `0006` (a layer keeps its old tiles for up to two frames while its new ones are being painted).
+4. **The frame threads are not real-time.** WebKit runs the scrolling thread, `EventDispatcher` and the UI process IPC queues with `SCHED_RR` 5 (`Thread::QOS::UserInteractive`, `RealTimeThreads`), but `ThreadedCompositor` (`CompositingRunLoop.cpp`), the Skia painting workers, `WPEScreenSyncObserverDRM` (the vblank thread that drives the `DisplayLink`) and the UI process main thread (input, IPC, DRM commit) are normal threads. With HZ=250, no `HRTICK` and the web process main thread at 100 % they are woken up to 7 ms late. `chrt -r -p 5` on these threads, interleaved with resetting them in the same session, climate view: 17.4 / 15.6 / 12.8 % → 14.9 / 12.5 / 10.8 % missed vblanks for compositor + vblank thread, 11.8 / 15.3 / 15.6 → 7.3 / 10.4 / 13.9 with the Skia workers added, 15.6 / 18.4 → 7.3 / 9.4 with the UI main thread as well. Fix: patch `0005` and `sched_setscheduler(SCHED_RR | SCHED_RESET_ON_FORK)` in `wallview-browser`.
+
+Patches (all apply to the 2.50.5 tree with `patch -p1 --dry-run`, the changed files compile with the CI flags):
+
+- `0004`: scrolling thread commits layer positions on every display refresh. Effect checked on the panel (binary-patched copy, see 2).
+- `0005`: compositor, Skia painting workers and DRM vblank thread as real-time threads; `wallview-browser.c`: UI main thread. Effect checked with `chrt` (see 4).
+- `0006`: compositor does not wait for unfinished tiles. Not yet run on the panel.
+- `0007`: display link serves full-speed clients without observers; needs `0004` to have an effect. Not yet run on the panel.
+
+Missed vblanks in the drag window (% of 288 per value, each value 2 runs of 8 swipes after a browser restart; "real-time" = `chrt -r -p 5` on compositor, Skia workers, vblank thread and UI main thread, i.e. what `0005` and the launcher do):
+
+| View | 2.50.5 + `0001`–`0003` | + real-time | + `0004` | + `0004` + real-time |
+|---|---|---|---|---|
+| climate | 5.9 / 16.0 | 8.0 / 9.0 | 15.3 / 14.6 | 8.7 / 5.2 |
+| settings | 12.8 | 8.7 | 30.6 | 6.6 |
+| lights | 5.9 | 3.8 | 3.1 | 1.0 |
+
+`0004` without the real-time threads is not better and can be clearly worse on the Home Assistant views: every vblank now starts a composition, and each of them can run into cause 3 with a compositor that is also woken late. `0004` and `0005` belong together; the rest of the misses is cause 3 (`0006`).
+
+All seven patches are in the build. Two runtime switches allow A/B measurements with one image (environment of `wallview-browser`, inherited by the web process): `WALLVIEW_WEBKIT_NO_SCROLL_COMMIT=1` restores the old behaviour of `0004` (and so disables `0007`), `WALLVIEW_WEBKIT_TILE_DEFER=<frames>` sets the deferral limit of `0006` (default 2, `0` waits for every tile as before). To build a library locally the Lima VM has a configured tree (`~/build/wk2`: `orig` pristine, `src` with the patches, `build` configured like CI); one WebCore unified source needs about 2.5 GB of compiler memory, so the 10 GB VM can run 3 jobs at most. A library can be tried without installing it: copy `libWPEWebKit-2.0.so.1` and the `libWPEPlatform*` libraries to `/tmp/<dir>` and start the kiosk loop with `LD_LIBRARY_PATH=/tmp/<dir>`.
+
+Measured with the CI image of PR #9 (all seven patches, 2026-11-27), switches as above, vblank thread set to `SCHED_RR` 5 with `chrt` right before each run (the image's `0005` did not promote it, fixed since). Missed vblanks in the drag window, two interleaved rounds of 8 swipes per value, total in brackets:
+
+| Configuration | climate | settings | lights |
+|---|---|---|---|
+| all patches | 3.8 / 13.7 (8.7) | 36.5 / 46.8 (41.7) | 0.7 / 3.3 (2.0) |
+| `WALLVIEW_WEBKIT_TILE_DEFER=0` (no `0006`) | 12.2 / 15.5 (13.8) | 36.8 / 39.7 (38.3) | 1.3 / 3.3 (2.3) |
+| `WALLVIEW_WEBKIT_NO_SCROLL_COMMIT=1` (no `0004`, `0007`) | 5.9 / 7.6 (6.8) | 49.4 / 40.0 (44.7) | 4.6 / 5.8 (5.2) |
+| both switches (real-time threads only) | 14.8 / 28.4 (21.6) | 34.2 / 47.7 (41.0) | 5.9 / 6.5 (6.2) |
+
+The patches together cut climate from 21.6 to 8.7 % and lights from 6.2 to 2.0 %. Settings stays at about 40 % in every configuration, so it has another limit: the compositor runs at every vblank (4–7 ms), but every other frame is skipped because the previous one has not been presented yet. Settings is the only view with a composited `canvas` layer (layer tree: 17 layers, reasons include `canvas` and `transform3D`); that layer is the next suspect. No view repaints at rest. Timeline: `out/debug/settings-trace.txt` (not in git).
+
+Settings is limited by input, not by frames (WebKit expert, IPC tap on the panel): the view's chart (`ha-chart-base`, zrender) registers a non-passive wheel listener and a `touchmove` handler that takes about 100 ms per event. Over it the scrolling tree asks for synchronous wheel processing, so the wheel events WPE makes from a touch drag went to the busy main thread, the UI process sent the next one only after the answer (3–4 per swipe instead of about 30) and the answers came up to 2 s later; 44 of 64 missed vblanks had no wheel event reaching the web process at all. Two more patches:
+
+- `0009`: the events of a touch-drag gesture (wheel phases `Began` to `Ended`, which on WPE only a touch drag produces) are handled on the scrolling thread also in synchronous wheel regions; the page still receives them but cannot block the scroll. `WALLVIEW_WEBKIT_SYNC_TOUCH_SCROLL=1` restores the old behaviour. With a binary-patched library that forces the same decision: settings 49.7 / 39.6 % → 5.8 / 8.3 %, climate 8.3 / 14.3 % → 9.1 / 8.3 %, lights 3.3 / 2.0 % → 0.6 / 1.3 %. The patch itself is compiled only.
+- `0010`: while the page has not answered a touch event, the UI process keeps at most one newer touch move with the same touch points back and sends it with the answer (any other touch event flushes it first), so a slow page is not flooded with 120 moves/s. `WALLVIEW_WEBKIT_NO_TOUCH_COALESCING=1` disables it. Compiled only.
+
+The remaining misses with `0009` are mostly late frames: GPU work that ends after the vblank (hand-over p99 14–16 ms, GPU p99 11–33 ms), led by tile painting on the Skia GPU workers sharing the GPU with the compositor.
+
+Measured with the CI image of run 46014060071 (patches `0001`–`0007`, `0009`, `0010`; the `0005` fix puts the vblank thread on `SCHED_RR` by itself, no `chrt`), same metric, 8 swipes per value:
+
+| Configuration | climate | settings | lights |
+|---|---|---|---|
+| all patches, 4 rounds | 6.5 / 6.5 / 12.7 / 3.2 (7.2 %) | 9.7 / 11.8 / 3.8 / 7.2 (8.1 %) | 2.6 / 3.9 / 1.3 / 3.3 (2.8 %) |
+| `WALLVIEW_WEBKIT_SYNC_TOUCH_SCROLL=1` (no `0009`), 2 rounds | 13.0 / 15.0 (14.0 %) | 42.2 / 19.0 (30.6 %) | 1.3 / 3.3 (2.3 %) |
+| `WALLVIEW_WEBKIT_NO_TOUCH_COALESCING=1` (no `0010`), 4 rounds | 9.2 / 3.2 / 4.5 / 1.9 (4.8 %) | 5.2 / 7.8 / 1.3 / 1.9 (4.0 %) | 2.0 / 1.3 / 3.2 / 3.9 (2.6 %) |
+
+`0009` fixes settings as predicted. `0010` does not help the frames and is worse on climate and settings; its effect on how fast the page reacts (the reason for it) was not measured.
+
+What stays on the main thread during a swipe and what it costs (climate, 100 % of one core): every touch move is sent to the page (`WebPageProxy::updateTouchEventTracking()` is `Synchronous` for everything outside Cocoa), i.e. touch and pointer event dispatch with `EventPath` and hit tests, every wheel event is dispatched to the DOM because of the passive `wheel` listener (`dispatchWheelEventViaMainThread()`), and every scroll position runs `RenderLayer::updateLayerPosition` / `recursiveUpdateLayerPositionsAfterScroll`. None of this blocks a frame once 1–4 are fixed, but it produces the tile repaints of cause 3 and keeps one core busy.
+
 ## Tried and dropped
 
 - Batching/merging Home Assistant websocket messages and overriding `ha-spinner` in an injected script (overview at rest 6 → 52 fps): removed, because it changes how the page behaves.
 - 1.512 GHz CPU: unstable on this unit.
+- CPU tile raster with the WPEPlatform build (`WEBKIT_SKIA_ENABLE_CPU_RENDERING=1 WEBKIT_SKIA_CPU_PAINTING_THREADS=3`, with the scrolling-thread change and real-time threads): climate about twice as many missed frames as GPU raster.
 
 ## Next steps
 
