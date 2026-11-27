@@ -1,13 +1,10 @@
 #!/bin/sh
-# wallview-touch: 120 Hz resampling of the touchscreen. Off with
-# `echo off > /data/wallview/touch-resampling` (the browser then reads the raw device).
 
 PIDFILE=/run/wallview-touch-loop.pid
 LOG=/tmp/wallview-touch.log
 
 touch_loop() {
 	while [ "$(cat /data/wallview/touch-resampling 2>/dev/null)" != off ]; do
-		# Keep the log small: it gets a line every 2 s while the touchscreen is missing.
 		if [ "$(wc -c < "$LOG" 2>/dev/null || echo 0)" -gt 65536 ]; then
 			tail -c 16384 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 		fi

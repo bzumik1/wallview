@@ -164,13 +164,6 @@ handle_frame(int64_t time)
             int first = first_active() == slot;
 
             c->ended = 0;
-            /*
-             * A predicted position is ahead of the last real sample along
-             * the motion. Moving back to that sample right at release would
-             * be a last move against the swipe and spoil the fling velocity,
-             * so the contact is released where it was shown.
-             */
-            /* A real sample that came after the last tick is newer than any prediction: show it. */
             if (!c->predicted || c->fresh)
                 emit_position(slot, c->x, c->y);
             c->fresh = 0;
@@ -250,14 +243,6 @@ resample(const struct options *options, int64_t now)
             int64_t ahead = target - last->time;
             int64_t limit = (last->time - a->time) / 2;
 
-            /*
-             * The kernel sends nothing while a finger rests (unchanged
-             * values are filtered), so a missing sample means the finger
-             * slowed down or stopped. Predict at most half a sample interval
-             * ahead (as Android does) and, once no sample has come for
-             * max_sample_gap, settle on the last real position instead of
-             * holding an overshoot for as long as the finger stays down.
-             */
             if (limit > options->max_prediction)
                 limit = options->max_prediction;
             if (ahead > limit)
@@ -278,11 +263,6 @@ resample(const struct options *options, int64_t now)
 static int dropped;
 static int input_fd;
 
-/*
- * After SYN_DROPPED: end every contact the device no longer reports and take
- * the current slot again, so that later events land on the right contact.
- * Contacts that began during the drop are picked up at their next touch.
- */
 static void
 resync(int64_t time, int *slot)
 {
@@ -450,10 +430,6 @@ main(int argc, char **argv)
     }
     input_fd = input;
 
-    /*
-     * Grab only while no finger is down: grabbed in the middle of a touch, the
-     * browser would never see that touch end on the raw device.
-     */
     for (int waited = 0;; waited++) {
         unsigned long keys[(KEY_CNT + 63) / 64] = { 0 };
 
@@ -466,12 +442,10 @@ main(int argc, char **argv)
         }
         usleep(50000);
     }
-    /* Grab before creating the virtual device, so a second instance never adds a phantom touchscreen. */
     if (ioctl(input, EVIOCGRAB, 1) < 0) {
         fprintf(stderr, "wallview-touch: grab: %s\n", strerror(errno));
         return 1;
     }
-    /* Events queued before the grab were already seen by the browser on the raw device: discard them. */
     {
         struct input_event stale[64];
 
@@ -488,7 +462,6 @@ main(int argc, char **argv)
 
     sched_setscheduler(0, SCHED_FIFO, &param);
 
-    /* The timer only runs while a finger is down, so an idle panel is not woken 120 times a second. */
     period = options.period;
     timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
     if (timer < 0) {
@@ -496,7 +469,6 @@ main(int argc, char **argv)
         return 1;
     }
 
-    /* The kernel only sends ABS_MT_SLOT when it changes: start from its current slot, not 0. */
     int slot = 0;
     struct input_absinfo current_slot;
 

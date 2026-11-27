@@ -1,33 +1,3 @@
-/*
- * CST226SE touch controller tool (see docs/touch-controller.md).
- *
- *   cstfw info           firmware trailer registers in info mode (version, checksum, ...)
- *   cstfw boot-check     reset, enter the boot loader (A0 01 AA), read 0xA003 (expect 0x55), reset
- *   cstfw boot-checksum  like boot-check, plus read 0xA000/0xA008 in boot mode (plan (a) step 3)
- *   cstfw flash <image> --current-checksum <0x...> --erase-and-program
- *                        program a 7680-byte image with the vendor protocol
- *   cstfw flash <vendor image> --recover --erase-and-program
- *                        the same without reading the chip first, for a chip whose
- *                        application no longer answers (after a failed flash); only
- *                        the vendor image (checksum 0x99630e41) is accepted
- *
- * Exit codes: 0 programmed, verified and the new application answers (or the
- * read-only command succeeded); 2 refused before touching the chip; 3 refused
- * after reading the chip (identification or checksum differs, or the chip did
- * not answer), nothing written; 5 boot mode never reached in any attempt,
- * nothing written; 1 programming failed, the flash may be partly written;
- * 4 programmed and verified by the boot loader, but the application does not
- * answer as expected afterwards.
- *
- * info, boot-check and boot-checksum never write the controller's flash. flash
- * does, and is the only command that can leave the controller without a working
- * application: use it only after boot-check succeeded, on the development panel,
- * with the owner's approval (docs/touch-controller.md, plans (a) and (b)).
- * flash first reads the chip and refuses unless its identification matches the
- * image and its current checksum is the one given, so the revert target is
- * stated on the command line. Run every command with the kernel driver unbound
- * (tools/touchfw/panel-cstfw.sh).
- */
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/gpio.h>
@@ -48,7 +18,7 @@
 #define I2C_DEV "/dev/i2c-1"
 #define GPIOCHIP "/dev/gpiochip0"
 #define GPIOCHIP_LABEL "gpio0"
-#define RESET_LINE 12 /* GPIO0_B4, active low */
+#define RESET_LINE 12
 #define DRIVER_LINK "/sys/bus/i2c/drivers/Hynitron-TS/1-005a"
 #define IMAGE_SIZE 7680
 #define PAGE_SIZE 512
@@ -57,13 +27,12 @@
 static int i2c;
 static int reset_fd = -1;
 
-/* Trailer fields 0x1de4-0x1df7, served in info mode at 0xD1F4-0xD207. */
 static const uint8_t ident[20] = {
-    0x0d, 0x00, 0x08, 0x00, /* 13 TX, 8 RX */
-    0xe0, 0x01, 0xe0, 0x01, /* 480 x 480 */
-    0xdc, 0x5f, 0xca, 0xca, /* check code */
-    0x02, 0x03, 0x00, 0x00, /* 0xD200 */
-    0x01, 0x4b, 0xa8, 0x00, /* project 0x4b01, chip 0x00a8 */
+    0x0d, 0x00, 0x08, 0x00,
+    0xe0, 0x01, 0xe0, 0x01,
+    0xdc, 0x5f, 0xca, 0xca,
+    0x02, 0x03, 0x00, 0x00,
+    0x01, 0x4b, 0xa8, 0x00,
 };
 
 static void
@@ -97,7 +66,6 @@ wr(const uint8_t *buf, int len)
     return xfer(&m, 1);
 }
 
-/* As the vendor driver: the register address in its own write (with STOP), then a separate read. */
 static int
 rd(uint16_t reg, uint8_t *buf, int len)
 {
@@ -172,7 +140,6 @@ out:
     return rc;
 }
 
-/* Reads the seven trailer registers; with out != NULL stores them as 28 bytes (0xD1F4-0xD20F). */
 static int
 info_read(uint8_t *out, int print)
 {
@@ -210,7 +177,6 @@ enter_boot(void)
 {
     uint8_t v = 0;
 
-    /* Vendor timing: reset, wait 10-20 ms, A0 01 AA, 6 ms, check 0xA003; up to 30 tries. */
     if (reset_pulse(12))
         return -1;
     for (int i = 0; i < 30; i++) {
@@ -252,14 +218,12 @@ boot_check(int read_checksum)
         else
             printf("no checksum available from the boot loader before programming\n");
     }
-    /* Leave boot mode by reset only; A0 06 EE (exit after programming) is not needed. */
     if (reset_pulse(60))
         return 1;
     printf("after reset:\n");
     return info_read(NULL, 1) || !ok;
 }
 
-/* Checksum = 0x55 + sum of the 1919 little-endian words before the checksum word. */
 static uint32_t
 image_checksum(const uint8_t *img)
 {
@@ -298,7 +262,6 @@ load_image(const char *path, uint8_t *img)
     return 0;
 }
 
-/* One attempt of the vendor update sequence (cst2xx_check_code), from reset to reset. */
 static int
 flash_once(const uint8_t *img)
 {
@@ -406,20 +369,17 @@ flash(const char *path, int recover, uint32_t current)
         }
     }
 
-    /* From here an interruption could leave a partly programmed flash: nothing may stop us. */
     signal(SIGPIPE, SIG_IGN);
     signal(SIGHUP, SIG_IGN);
     signal(SIGINT, SIG_IGN);
     signal(SIGTERM, SIG_IGN);
     signal(SIGQUIT, SIG_IGN);
 
-    /* Keep the boot loader timing (12 ms, 6 ms windows) under a busy kiosk. */
     struct sched_param param = { .sched_priority = 50 };
 
     sched_setscheduler(0, SCHED_FIFO, &param);
     mlockall(MCL_CURRENT | MCL_FUTURE);
 
-    /* Like the vendor driver: on any failure start again from reset and page 0, up to 5 times. */
     int erased = 0;
 
     for (int attempt = 1; attempt <= 5; attempt++) {

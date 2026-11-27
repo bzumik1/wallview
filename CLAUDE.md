@@ -12,6 +12,13 @@ Jakub's agents (claude.ai project threads, T3 Code and Claude Code on his Mac) w
 - Uncommitted work in `~/WallView` on the Mac belongs to whoever made it: do not commit, move or revert another agent's files; ask Jakub.
 - Shared Mac: kill only a process you started, by the PID you captured, never by name or pattern; do not stop the Lima VM `wallview` or a build another thread started.
 
+## Code and files
+
+- No comments in code, scripts or patches; explanations go into `docs/` and commit messages. Docstrings are allowed only in the Home Assistant integration (`custom_components/`).
+- Everything in the repository is in English.
+- Never commit firmware dumps, vendor firmware or binary blobs (`backup/`, `extract/`, `out*/`, `local/`, `*.img`, `*.bin` stay ignored).
+- Never commit personal or network details: Wi-Fi credentials, panel MAC addresses, serial numbers, LAN IP addresses, Jakub's Home Assistant domain. Scan the diff, including untracked files, before every commit.
+
 ## The panel
 
 There is one development panel and one reference panel; agents share them.

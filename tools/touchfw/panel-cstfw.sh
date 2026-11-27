@@ -1,25 +1,8 @@
 #!/bin/sh
-# Usage: tools/touchfw/panel-cstfw.sh root@<panel> info|boot-check|boot-checksum
-#        tools/touchfw/panel-cstfw.sh root@<panel> flash <image> <current-checksum> --erase-and-program
-#        tools/touchfw/panel-cstfw.sh root@<panel> recover <vendor image> --erase-and-program
-#        tools/touchfw/panel-cstfw.sh root@<panel> follow
-#
-# Builds cstfw in the Lima VM `wallview`, takes the panel lock and runs cstfw on
-# the panel with the touch driver unbound. Only flash and recover write the
-# controller's flash (see docs/touch-controller.md, "Tools").
-#
-# info/boot-check/boot-checksum unbind the driver only if it is bound, and bind it
-# again only if it was bound and no flash has failed (/data/wallview/cstfw-failed).
-#
-# flash/recover run detached on the panel (tools/touchfw/cstfw-run.sh), which
-# from then on owns the lock: losing SSH or Ctrl-C here cannot stop or unlock a
-# flash. `follow` attaches to a running or finished flash again. After a failed
-# flash the driver stays unbound, the agent paused, the lock held and
-# /data/wallview/cstfw-failed set (it survives a reboot); run recover.
 set -eu
 PANEL=${1:-}
 CMD=${2:-}
-SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
+SSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
 usage() {
 	sed -n '2,5p' "$0" | sed 's/^# //' >&2
 	exit 2
@@ -48,7 +31,6 @@ MARK=/data/wallview/cstfw-failed
 RUNNER_OWNER="touch controller flash (cstfw-run)"
 
 follow() {
-	# Waits for the detached run's result; gives up after 300 s (5 attempts take at most about 2 min).
 	$SSH "$PANEL" 'R=/tmp/cstfw.run; n=0
 		[ -d $R ] || { echo "no flash run on the panel" >&2; exit 96; }
 		while [ ! -s $R/rc ]; do
@@ -81,12 +63,10 @@ fi
 OUT=$REPO/out/cstfw/cstfw
 mkdir -p "$(dirname "$OUT")"
 rm -f "$OUT"
-# The repository is mounted at the same path in the VM; ~ is expanded inside the VM.
 limactl shell wallview -- bash -c '~/build/br/host/bin/aarch64-none-linux-gnu-gcc -O2 -Wall -Wextra -Werror -o "$1" "$2"' \
 	_ "$OUT" "$HERE/cstfw.c"
 [ -s "$OUT" ] || { echo "cstfw was not built" >&2; exit 1; }
 
-# A finished or dead run directory is stale; a live one (cstfw or the runner still running) blocks everything.
 $SSH "$PANEL" 'R=/tmp/cstfw.run
 	[ -d $R ] || exit 0
 	if [ ! -s $R/rc ] && { pidof cstfw > /dev/null || { [ -s $R/pid ] && kill -0 "$(cat $R/pid)" 2>/dev/null; }; }; then
@@ -95,20 +75,17 @@ $SSH "$PANEL" 'R=/tmp/cstfw.run
 	echo "removing the finished run directory (rc $(cat $R/rc 2>/dev/null || echo none))"
 	rm -rf $R'
 
-# After a failed (or interrupted) flash the lock stays with the runner; recover takes it over.
 if [ "$CMD" = recover ] && $SSH "$PANEL" "[ -e $MARK ] && [ \"\$(cat /tmp/wallview-panel.lock/owner 2>/dev/null)\" = '$RUNNER_OWNER' ]"; then
 	echo "taking over the lock kept by the failed flash: $($SSH "$PANEL" "cat $MARK")"
 else
 	"$REPO/tools/panel-lock.sh" "$PANEL" acquire "$OWNER"
 fi
-# Releases only a lock still under OWNER: once a runner has taken it, this does nothing.
 trap '"$REPO/tools/panel-lock.sh" "$PANEL" release "$OWNER" 2>/dev/null || true' EXIT
 
 $SSH "$PANEL" 'cat > /tmp/cstfw && chmod +x /tmp/cstfw' < "$OUT"
 
 case "$CMD" in
 info | boot-check | boot-checksum)
-	# The remote traps restore the driver whatever happens, also on a dropped connection.
 	$SSH "$PANEL" "D=/sys/bus/i2c/drivers/Hynitron-TS
 		bound=0
 		[ -e \$D/1-005a ] && bound=1
@@ -123,7 +100,6 @@ flash | recover)
 	[ "$CMD" = flash ] && ARG=$4
 	$SSH "$PANEL" 'cat > /tmp/cstfw-run.sh' < "$HERE/cstfw-run.sh"
 	$SSH "$PANEL" 'cat > /tmp/cst-image.bin' < "$3"
-	# The lock is handed to the runner in the same command that starts it.
 	$SSH "$PANEL" "command -v setsid > /dev/null || { echo 'no setsid on the panel' >&2; exit 3; }
 		mkdir /tmp/cstfw.run || exit 75
 		printf '%s\n' '$RUNNER_OWNER' > /tmp/wallview-panel.lock/owner
