@@ -24,7 +24,7 @@ The vendor firmware is not distributed: it stays in the git-ignored `local/firmw
 
 ## Tools (`tools/touchfw/`)
 
-Written 2026-11-27 for the 120 Hz goal and reviewed in rounds by an independent senior embedded reviewer; not run on hardware yet.
+Written 2026-11-27 for the 120 Hz goal and reviewed in rounds by an independent senior embedded reviewer. Run on the development panel on 2026-11-27: info, boot-check, boot-checksum and two no-op re-flashes of the vendor image, all rc 0.
 
 - `cstfw.c` (runs on the panel, refuses while the kernel driver is bound):
   - `info`: step 1, trailer registers in info mode.
@@ -313,8 +313,9 @@ Worst case: the boot code is not what the evidence says and the chip stays dead.
 Only after (a) has succeeded at least twice.
 
 1. Change one field per image, starting with the front-end fields in the table above (for example `cfg[0x66]` 20 → 10, then `cfg[0xb4]` 339 → 170), recompute the checksum word, keep version `0x03000001`. Keep every image and its measurements under `local/firmware/hynitron/`.
-2. Flash with the proven flasher, then measure: INT period and jitter with `touchprobe` (finger circling), rest jitter with a finger held still, five-finger test, palm, edge taps, behaviour with the relay board switching and with USB power versus mains.
-3. Revert to the original image between experiments whenever the result is unclear.
+2. Before flashing a try image: stop the kiosk browser or show a harmless page (ghost touches must not reach Home Assistant), check with `cstimg.py show` and `cmp -l` that only the changed byte and the checksum word differ, post `Start` in issue #7 with the try image's checksum. Measure each image with `tools/perf/panel-touchprobe.sh root@PANEL <seconds> <name>` (lock, marker check, unbind, trapped re-bind; output in `local/touchprobe/`): finger circling, finger still (position spread) and no finger (reads with touch are ghosts). Revert to the vendor image in the same sitting and finish with `info` and `boot-checksum`. Keep a count of flash cycles in `local/`.
+3. Flash with the proven flasher, then measure: INT period and jitter with `touchprobe` (finger circling), rest jitter with a finger held still, five-finger test, palm, edge taps, behaviour with the relay board switching and with USB power versus mains.
+4. Revert to the original image between experiments whenever the result is unclear.
 
 Risks, highest first:
 

@@ -40,3 +40,8 @@ for path in sys.argv[1:]:
         if (d[3], d[4]) != (changes[-1][3], changes[-1][4]):
             changes.append(d)
     describe("new position interval", [b[0] - a[0] for a, b in zip(changes, changes[1:]) if b[0] - a[0] < 200e6])
+    xs = [d[3] for d in touching]
+    ys = [d[4] for d in touching]
+    if xs:
+        print(f"position spread: x {min(xs)}-{max(xs)} (stdev {statistics.pstdev(xs):.1f}), y {min(ys)}-{max(ys)} (stdev {statistics.pstdev(ys):.1f})")
+    print(f"reads without touch {len(data) - len(touching)}")
