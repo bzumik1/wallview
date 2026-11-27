@@ -63,6 +63,45 @@ Chromium's window is 500×480 (Chromium's minimum window width is 500 px), i.e. 
 
 `motionFps` (added later) counts frames between the first and the last new frame of a swipe, without the 70–200 ms before the browser starts scrolling; with it Chromium reaches 48–60 fps on climate (some swipes with no missed frame) and 42–57 fps on lights. `--enable-zero-copy --num-raster-threads=4` made no measurable difference; `SystemInfo.getInfo` shows GPU compositing and forced GPU rasterization on Panfrost through ANGLE.
 
+### wallview-browser (WPEPlatform DRM, patches 0001–0003, `-mno-outline-atomics`), 2026-11-27
+
+Same test, CI run 45922728022. The image lacked xkeyboard-config, so the browser crashed at start (`xkbcommon: failed to add default include path`); measured with the data copied to `/tmp/X11/xkb` and `XKB_CONFIG_ROOT`, the next image installs it.
+
+| View | motionFps per swipe | missed vblanks per swipe | first frame |
+|---|---|---|---|
+| climate | 45–56 | 2–7 | 34–132 ms |
+| lights | 47–58 | 1–6 | 46–90 ms |
+| presence | 42–60 | 0–8 | 41–100 ms |
+| battery | 44–58 | 1–8 | 49–81 ms |
+| media | 42–60 | 0–8 | 41–92 ms |
+| settings | 35–56 | 2–8 | 5–125 ms |
+
+Control pages served over HTTP from another machine (`file://` cannot be opened from the HTTPS dashboard):
+
+- static page of 200 coloured blocks, no script: 60.1 fps on all 8 swipes, 0 missed, first frame 36–52 ms;
+- a compositor-only CSS `transform` animation: 299 new frames in 300 vblanks;
+- the static page plus a 40 ms busy loop on the main thread every 150 ms: 50–60 fps, 2–5 missed per swipe.
+
+So input, the scrolling thread, the compositor and DRM can hold 60 fps; the remaining missed frames come from scroll frames still waiting on the WebProcess main thread. During swipes on the settings view the main thread used 48 % of a core, the compositor 12 %, the Skia GPU worker 13 %, the scrolling thread 1 %.
+
+### Touch controller report rate (2026-11-27)
+
+The test replay sends a move every 8 ms; the real CST226SE does much less. Raw `/dev/input/event0` recorded while dragging a finger (`timeout 30 cat /dev/input/event0`, 24-byte `input_event` records, intervals between `SYN_REPORT` while touching): median 21.6 ms (46 Hz), 10th percentile 14 ms, 90th percentile 47.5 ms, worst 93 ms, with no fixed period. Interrupts of the `Hynitron Touch Int` line (`/proc/interrupts`) during continuous circling: 14–44 per second. The driver logs no read failures. With fewer than 60 position updates per second some display frames have no new position, so real finger scrolling cannot be smooth even when the engine is. The I²C bus runs at the default 100 kHz (one report: 28-byte read plus acknowledge, about 3.5 ms) and the interrupt is edge-triggered (`IRQ_TYPE_EDGE_FALLING`, threaded, `IRQF_ONESHOT`). 
+
+`tools/perf/touchprobe.c` reads the controller directly to separate the controller from the driver: unbind the driver (`echo 1-005a > /sys/bus/i2c/drivers/Hynitron-TS/unbind`), sample the INT line (`gpiochip0` line 13) through a GPIO line handle about 5000 times a second, read `0xD000` (28 bytes) and acknowledge (`0xD000 = 0xAB`) like the driver, then bind again; `tools/perf/touchprobe.py` summarises. Do not use a GPIO line *event* request on that line: it leaves the interrupt mapped as both-edge and the driver then fails to bind (`irq: type mismatch, failed to map hwirq-13`) until a falling-edge-only line event is requested once. Result with a finger circling continuously:
+
+| | median | p10–p90 |
+|---|---|---|
+| INT falling edge interval | 18.5 ms | 13.8–35.8 ms |
+| INT low time | 14.3 ms | 9.6–21.8 ms |
+| new position, reading at each INT | 22.5 ms | 14.1–54.6 ms |
+| new position, reading every 2 ms regardless of INT | 20.1 ms | 13.3–45.2 ms |
+| I²C read + acknowledge | 3.7 ms | |
+
+The controller itself produces new coordinates only every 13–20 ms (50–75 Hz) with irregular longer gaps; reading faster or differently does not help, the kernel driver loses nothing, and the I²C speed is irrelevant. The scan rate is set by the controller firmware; no public document or driver (mainline, vendor `hyn_cst3xx` in the original Android kernel) shows a register to change it. Phones with such controllers make scrolling smooth by resampling touch positions to the display frames (Android `InputConsumer` resampling, Chromium scroll resampling).
+
+The controller firmware, its update protocol and what it would take to raise the scan rate are in [touch-controller.md](touch-controller.md) (parked, with the steps to resume). On the panel side `wallview-touch` (`buildroot/board/wallview/touch/`) grabs the touchscreen and feeds the browser a virtual touchscreen at a steady 120 Hz: positions interpolated from the last samples `WALLVIEW_TOUCH_LATENCY_MS` (default 8) behind real time and predicted at most `WALLVIEW_TOUCH_PREDICTION_MS` (default 12) ahead of the last sample; touch down and up pass through at once.
+
 Neither engine holds 60 fps yet; Chromium is close because touch scrolling runs on its compositor thread with GPU raster. During Chromium swipes the GPU is about 3 % busy and the CPU 30 %, so the remaining missed frames are deadline/scheduling problems, not throughput. Disabling the deep idle states (`cpu-sleep` 370 µs, `cluster-sleep` 900 µs exit latency) made no measurable difference (lights 46–57 fps).
 
 ## Findings
