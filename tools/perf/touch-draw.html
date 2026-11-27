@@ -1,0 +1,145 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Touch draw</title>
+<style>
+html, body { margin: 0; height: 100%; background: #000; color: #ddd; font: 13px system-ui, sans-serif; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; touch-action: none; }
+#stats { position: fixed; left: 6px; top: 4px; pointer-events: none; white-space: pre; font-variant-numeric: tabular-nums; line-height: 1.35; }
+#reset { position: fixed; right: 6px; top: 6px; padding: 10px 16px; font: 600 15px system-ui, sans-serif; color: #fff; background: #333; border: 1px solid #666; border-radius: 8px; }
+#mode { position: fixed; right: 6px; top: 52px; padding: 8px 12px; font: 13px system-ui, sans-serif; color: #fff; background: #222; border: 1px solid #555; border-radius: 8px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="stats"></div>
+<button id="reset">Reset</button>
+<button id="mode">dots: on</button>
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const stats = document.getElementById("stats");
+const colors = ["#4fc3f7", "#ffb74d", "#81c784", "#e57373", "#ba68c8"];
+const last = new Map();
+let dots = true;
+let times = [];
+let frames = [];
+let total = 0;
+let maxGap = 0;
+let prevTime = 0;
+
+function resize() {
+	const r = devicePixelRatio || 1;
+	canvas.width = Math.round(innerWidth * r);
+	canvas.height = Math.round(innerHeight * r);
+	ctx.setTransform(r, 0, 0, r, 0, 0);
+	clear();
+}
+
+function clear() {
+	ctx.fillStyle = "#000";
+	ctx.fillRect(0, 0, innerWidth, innerHeight);
+	last.clear();
+	times = [];
+	total = 0;
+	maxGap = 0;
+	prevTime = 0;
+}
+
+function color(id) {
+	return colors[Math.abs(id) % colors.length];
+}
+
+function point(e, p) {
+	const c = color(e.pointerId);
+	const prev = last.get(e.pointerId);
+	if (prev) {
+		ctx.strokeStyle = c;
+		ctx.lineWidth = 2;
+		ctx.beginPath();
+		ctx.moveTo(prev.x, prev.y);
+		ctx.lineTo(p.clientX, p.clientY);
+		ctx.stroke();
+	}
+	if (dots) {
+		ctx.fillStyle = "#fff";
+		ctx.fillRect(p.clientX - 1.5, p.clientY - 1.5, 3, 3);
+	}
+	last.set(e.pointerId, { x: p.clientX, y: p.clientY });
+}
+
+function record(t) {
+	if (prevTime) {
+		maxGap = Math.max(maxGap, t - prevTime);
+	}
+	prevTime = t;
+	times.push(t);
+	total++;
+}
+
+function onMove(e) {
+	if (!last.has(e.pointerId)) {
+		return;
+	}
+	const list = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+	const pts = list.length ? list : [e];
+	for (const p of pts) {
+		point(e, p);
+		record(p.timeStamp || performance.now());
+	}
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+	canvas.setPointerCapture(e.pointerId);
+	last.set(e.pointerId, null);
+	point(e, e);
+	prevTime = 0;
+	record(e.timeStamp || performance.now());
+});
+canvas.addEventListener("pointermove", onMove);
+for (const type of ["pointerup", "pointercancel"]) {
+	canvas.addEventListener(type, (e) => { last.delete(e.pointerId); prevTime = 0; });
+}
+document.getElementById("reset").addEventListener("click", clear);
+document.getElementById("mode").addEventListener("click", (e) => {
+	dots = !dots;
+	e.target.textContent = `dots: ${dots ? "on" : "off"}`;
+});
+
+function median(a) {
+	if (!a.length) {
+		return 0;
+	}
+	const s = [...a].sort((x, y) => x - y);
+	return s[Math.floor(s.length / 2)];
+}
+
+function tick(now) {
+	frames.push(now);
+	while (frames.length && now - frames[0] > 1000) {
+		frames.shift();
+	}
+	while (times.length && now - times[0] > 1000) {
+		times.shift();
+	}
+	const gaps = [];
+	for (let i = 1; i < times.length; i++) {
+		gaps.push(times[i] - times[i - 1]);
+	}
+	stats.textContent =
+		`events/s ${times.length}\n` +
+		`interval median ${median(gaps).toFixed(1)} ms\n` +
+		`max gap ${maxGap.toFixed(0)} ms\n` +
+		`frames/s ${frames.length}\n` +
+		`total ${total}`;
+	requestAnimationFrame(tick);
+}
+
+addEventListener("resize", resize);
+resize();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
