@@ -61,7 +61,9 @@ Chromium's window is 500×480 (Chromium's minimum window width is 500 px), i.e. 
 | lights | 11–29 fps, first frame 83–176 ms | 36–43 fps, first frame 65–111 ms |
 | overview | 27–30 fps (the infinite spinner flips at 30 fps all the time) | not valid: the swipe line crosses the map card, which pans the map instead of the page |
 
-Neither engine reaches 60 fps yet; Chromium is clearly ahead because touch scrolling runs on its compositor thread with GPU raster.
+`motionFps` (added later) counts frames between the first and the last new frame of a swipe, without the 70–200 ms before the browser starts scrolling; with it Chromium reaches 48–60 fps on climate (some swipes with no missed frame) and 42–57 fps on lights. `--enable-zero-copy --num-raster-threads=4` made no measurable difference; `SystemInfo.getInfo` shows GPU compositing and forced GPU rasterization on Panfrost through ANGLE.
+
+Neither engine holds 60 fps yet; Chromium is close because touch scrolling runs on its compositor thread with GPU raster.
 
 ## Findings
 

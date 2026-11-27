@@ -21,9 +21,10 @@ for i, (kind, t) in enumerate(marks):
         "frames": len(window),
         "windowMs": round((end + 0.3 - t) * 1000),
         "fps": round(len(window) / (end + 0.3 - t), 1),
+        "motionFps": round((len(window) - 1) / (window[-1] - window[0]), 1) if len(window) > 2 else None,
         "worstGapMs": round(max(gaps) * 1000) if gaps else None,
         "missed": sum(max(0, round(g / 0.01667) - 1) for g in gaps),
     })
 print(json.dumps(results))
-summary = {k: [r[k] for r in results] for k in ("fps", "worstGapMs", "firstFrameMs", "missed")}
+summary = {k: [r[k] for r in results] for k in ("motionFps", "worstGapMs", "firstFrameMs", "missed")}
 print(json.dumps(summary))
