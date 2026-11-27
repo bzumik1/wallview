@@ -74,6 +74,7 @@ The large unified WebCore sources need 2–3 GB per compiler process. With an 8 
 | `/data/wallview/language` | locale for WebKit and the start screen, e.g. `cs_CZ.UTF-8` (default `en_US.UTF-8`) |
 | `/data/wallview/wpa_supplicant.conf` | Wi-Fi network written by Improv (SSID in hex, PSK as hash) |
 | `/data/wallview/bluetooth-proxy` | `on` when the ESPHome Bluetooth proxy is on, see [Home Assistant integration](home-assistant.md#bluetooth-proxy) |
+| `/data/wallview/presence` | `sensitivity=<1–100>` of the Presence binary sensor, see [Home Assistant integration](home-assistant.md#presence) |
 | `/data/wallview/api.key` | ESPHome API encryption key provisioned by Home Assistant |
 | `/data/wallview/network.log` | Wi-Fi start log (configuration used, missing `wlan0` with the interfaces present) |
 | `/data/wallview/ssh/authorized_keys` | SSH keys when the image has none built in (development only) |

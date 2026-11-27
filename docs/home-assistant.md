@@ -21,7 +21,8 @@ The panel identifies itself honestly: manufacturer "WallView", model "Sonoff NSP
 | Entity | Type | Source / action |
 |---|---|---|
 | Display | light (brightness) | `/sys/class/backlight/backlight` |
-| Presence | binary sensor (occupancy) | proximity sensor above a threshold (hand in front of the panel) |
+| Presence | binary sensor (occupancy) | proximity sensor rises above its baseline (hand or person in front of the panel), see [Presence](#presence) |
+| Presence sensitivity | number, %, config | `/data/wallview/presence`: 1–100, default 50 |
 | Illuminance | sensor, lx | light sensor (`stk3310`, raw × scale) |
 | Proximity | sensor, diagnostic | raw proximity value |
 | CPU temperature | sensor, °C, diagnostic | `thermal_zone0` |
@@ -39,6 +40,14 @@ The panel identifies itself honestly: manufacturer "WallView", model "Sonoff NSP
 | Bluetooth proxy | switch, config | `/data/wallview/bluetooth-proxy`: off (default) or on, see [Bluetooth proxy](#bluetooth-proxy) |
 
 Presence changes are sent immediately, sensors every 15 s, commands answer with the new state.
+
+## Presence
+
+The agent samples the proximity channel of the `stk3310` every 100 ms. The raw value is compared with a baseline, not with a fixed number, because the reflection off the cover glass differs from panel to panel and drifts with temperature: the baseline follows a lower reading at once and a higher one slowly (about 10 s time constant) while nobody is near, and stays put while Presence is on.
+
+- Presence turns on when the reading rises above the baseline by the rise that **Presence sensitivity** sets: 1000 counts at 1 %, 2 counts at 100 %, on a logarithmic scale (about 46 at the default 50 %; before, presence was a fixed raw value of 100 with a baseline of about 3).
+- It turns off once the reading has been below half of that rise for 1 s, so a quick wave is still seen by Home Assistant (the API loop sends states every 500 ms) and the state does not flicker at the edge.
+- To calibrate, watch the diagnostic **Proximity** sensor (raw value) with nothing in front and at the distance that should count; a slow drift is absorbed into the baseline, a person in front of the panel is not for the first 10 minutes; after 10 minutes of continuous presence the baseline starts to follow again, so an object left in front of the panel releases Presence. Longer delays (turn the screen off after a minute without presence) belong in a Home Assistant automation.
 
 ## Zigbee and Thread
 
