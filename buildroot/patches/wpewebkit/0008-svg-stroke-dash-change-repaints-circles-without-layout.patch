@@ -1,0 +1,168 @@
+From: WallView
+Subject: [PATCH] SVG: a stroke dash change repaints circles and ellipses without layout
+
+A change of stroke-dasharray or stroke-dashoffset required a layout,
+because shapes cache stroke bounding boxes that may depend on the dash
+pattern. A CSS animation of these properties, such as Home Assistant's
+loading spinner (a circle whose dash pattern animates forever), therefore
+ran a full frame layout pass every animation frame: performLayout,
+post-layout tasks and a compositing update over the whole page.
+
+The stroke bounding boxes of the legacy circle and ellipse renderer
+without a non-scaling stroke are its fill box inflated by half the stroke
+width, independent of dashes. For such a renderer a dash change is now a
+repaint; every other renderer (paths, rects, text, non-scaling strokes,
+the layer-based SVG engine) still lays out, through a new context
+sensitive difference that RenderElement::adjustStyleDifference resolves
+per renderer. RenderStyle::diff reports a dash change as at least a
+repaint, so no caller sees two styles that differ in dashes as equal.
+
+Upstream-Status: Pending
+---
+diff --git a/Source/WebCore/rendering/RenderElement.cpp b/Source/WebCore/rendering/RenderElement.cpp
+index bff3501..9236f6f 100644
+--- a/Source/WebCore/rendering/RenderElement.cpp
++++ b/Source/WebCore/rendering/RenderElement.cpp
+@@ -310,6 +310,9 @@ StyleDifference RenderElement::adjustStyleDifference(StyleDifference diff, Optio
+             diff = std::max(diff, StyleDifference::RecompositeLayer);
+     }
+ 
++    if (contextSensitiveProperties & StyleDifferenceContextSensitiveProperty::StrokeDash)
++        diff = std::max(diff, strokeBoundsDependOnDashes() ? StyleDifference::Layout : StyleDifference::Repaint);
++
+     if (contextSensitiveProperties & StyleDifferenceContextSensitiveProperty::Opacity) {
+         if (!hasLayer() || !downcast<RenderLayerModelObject>(*this).layer()->isComposited())
+             diff = std::max(diff, StyleDifference::RepaintLayer);
+diff --git a/Source/WebCore/rendering/RenderElement.h b/Source/WebCore/rendering/RenderElement.h
+index 54729d9..d999db6 100644
+--- a/Source/WebCore/rendering/RenderElement.h
++++ b/Source/WebCore/rendering/RenderElement.h
+@@ -279,6 +279,7 @@ public:
+     virtual void animationPaused(double /* timeOffset */, const BlendingKeyframes&) { }
+     virtual void animationFinished(const BlendingKeyframes&) { }
+     virtual void transformRelatedPropertyDidChange() { }
++    virtual bool strokeBoundsDependOnDashes() const { return true; }
+ 
+     // https://www.w3.org/TR/css-transforms-1/#transform-box
+     inline FloatRect transformReferenceBoxRect(const RenderStyle&) const;
+diff --git a/Source/WebCore/rendering/style/RenderStyle.cpp b/Source/WebCore/rendering/style/RenderStyle.cpp
+index 75b6550..6b49284 100644
+--- a/Source/WebCore/rendering/style/RenderStyle.cpp
++++ b/Source/WebCore/rendering/style/RenderStyle.cpp
+@@ -984,8 +984,12 @@ static bool rareInheritedDataChangeRequiresLayout(const StyleRareInheritedData&
+ 
+ bool RenderStyle::changeRequiresLayout(const RenderStyle& other, OptionSet<StyleDifferenceContextSensitiveProperty>& changedContextSensitiveProperties) const
+ {
+-    if (m_svgStyle.ptr() != other.m_svgStyle.ptr() && m_svgStyle->changeRequiresLayout(other.m_svgStyle))
+-        return true;
++    if (m_svgStyle.ptr() != other.m_svgStyle.ptr()) {
++        if (m_svgStyle->strokeDashChanged(other.m_svgStyle))
++            changedContextSensitiveProperties.add(StyleDifferenceContextSensitiveProperty::StrokeDash);
++        if (m_svgStyle->changeRequiresLayout(other.m_svgStyle))
++            return true;
++    }
+ 
+     if (m_nonInheritedData.ptr() != other.m_nonInheritedData.ptr()) {
+         if (m_nonInheritedData->boxData.ptr() != other.m_nonInheritedData->boxData.ptr()) {
+diff --git a/Source/WebCore/rendering/style/RenderStyleConstants.cpp b/Source/WebCore/rendering/style/RenderStyleConstants.cpp
+index 9ce3a09..e20a339 100644
+--- a/Source/WebCore/rendering/style/RenderStyleConstants.cpp
++++ b/Source/WebCore/rendering/style/RenderStyleConstants.cpp
+@@ -1518,6 +1518,7 @@ TextStream& operator<<(TextStream& ts, StyleDifferenceContextSensitiveProperty p
+     case StyleDifferenceContextSensitiveProperty::ClipRect: ts << "clipRect"_s; break;
+     case StyleDifferenceContextSensitiveProperty::ClipPath: ts << "clipPath"_s; break;
+     case StyleDifferenceContextSensitiveProperty::WillChange: ts << "willChange"_s; break;
++    case StyleDifferenceContextSensitiveProperty::StrokeDash: ts << "strokeDash"_s; break;
+     }
+     return ts;
+ }
+diff --git a/Source/WebCore/rendering/style/RenderStyleConstants.h b/Source/WebCore/rendering/style/RenderStyleConstants.h
+index f52b22b..1f4c1f6 100644
+--- a/Source/WebCore/rendering/style/RenderStyleConstants.h
++++ b/Source/WebCore/rendering/style/RenderStyleConstants.h
+@@ -79,6 +79,7 @@ enum class StyleDifferenceContextSensitiveProperty : uint8_t {
+     ClipRect    = 1 << 3,
+     ClipPath    = 1 << 4,
+     WillChange  = 1 << 5,
++    StrokeDash  = 1 << 6,
+ };
+ 
+ // Static pseudo styles. Dynamic ones are produced on the fly.
+diff --git a/Source/WebCore/rendering/style/SVGRenderStyle.cpp b/Source/WebCore/rendering/style/SVGRenderStyle.cpp
+index 3c538e5..2832db1 100644
+--- a/Source/WebCore/rendering/style/SVGRenderStyle.cpp
++++ b/Source/WebCore/rendering/style/SVGRenderStyle.cpp
+@@ -171,8 +171,6 @@ bool SVGRenderStyle::changeRequiresLayout(const SVGRenderStyle& other) const
+     // Some stroke properties, requires relayouts, as the cached stroke boundaries need to be recalculated.
+     if (m_strokeData->paint.type != other.m_strokeData->paint.type
+         || m_strokeData->paint.url != other.m_strokeData->paint.url
+-        || m_strokeData->dashArray != other.m_strokeData->dashArray
+-        || m_strokeData->dashOffset != other.m_strokeData->dashOffset
+         || m_strokeData->visitedLinkPaint.type != other.m_strokeData->visitedLinkPaint.type
+         || m_strokeData->visitedLinkPaint.url != other.m_strokeData->visitedLinkPaint.url)
+         return true;
+@@ -184,6 +182,12 @@ bool SVGRenderStyle::changeRequiresLayout(const SVGRenderStyle& other) const
+     return false;
+ }
+ 
++bool SVGRenderStyle::strokeDashChanged(const SVGRenderStyle& other) const
++{
++    return m_strokeData->dashArray != other.m_strokeData->dashArray
++        || m_strokeData->dashOffset != other.m_strokeData->dashOffset;
++}
++
+ bool SVGRenderStyle::changeRequiresRepaint(const SVGRenderStyle& other, bool currentColorDiffers) const
+ {
+     if (this == &other) {
+@@ -195,6 +199,9 @@ bool SVGRenderStyle::changeRequiresRepaint(const SVGRenderStyle& other, bool cur
+             || containsCurrentColor(m_fillData->paint.color); // FIXME: Should this be checking m_fillData->visitedLinkPaint.color as well?
+     }
+ 
++    if (strokeDashChanged(other))
++        return true;
++
+     if (m_strokeData->opacity != other.m_strokeData->opacity
+         || colorChangeRequiresRepaint(m_strokeData->paint.color, other.m_strokeData->paint.color, currentColorDiffers)
+         || colorChangeRequiresRepaint(m_strokeData->visitedLinkPaint.color, other.m_strokeData->visitedLinkPaint.color, currentColorDiffers))
+diff --git a/Source/WebCore/rendering/style/SVGRenderStyle.h b/Source/WebCore/rendering/style/SVGRenderStyle.h
+index 7263627..acca76d 100644
+--- a/Source/WebCore/rendering/style/SVGRenderStyle.h
++++ b/Source/WebCore/rendering/style/SVGRenderStyle.h
+@@ -56,6 +56,7 @@ public:
+ 
+     bool changeRequiresRepaint(const SVGRenderStyle& other, bool currentColorDiffers) const;
+     bool changeRequiresLayout(const SVGRenderStyle& other) const;
++    bool strokeDashChanged(const SVGRenderStyle& other) const;
+ 
+     bool operator==(const SVGRenderStyle&) const;
+ 
+diff --git a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp
+index 03d46c4..1921389 100644
+--- a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp
++++ b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp
+@@ -80,6 +80,13 @@ void LegacyRenderSVGEllipse::updateShapeFromElement()
+         m_strokeBoundingBox->inflate(strokeWidth() / 2);
+ }
+ 
++bool LegacyRenderSVGEllipse::strokeBoundsDependOnDashes() const
++{
++    if (m_shapeType != ShapeType::Circle && m_shapeType != ShapeType::Ellipse)
++        return true;
++    return hasNonScalingStroke();
++}
++
+ void LegacyRenderSVGEllipse::calculateRadiiAndCenter()
+ {
+     Ref graphicsElement = this->graphicsElement();
+diff --git a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h
+index 67c5910..55c7d4a 100644
+--- a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h
++++ b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h
+@@ -43,6 +43,7 @@ private:
+     void updateShapeFromElement() override;
+     bool isEmpty() const override { return hasPath() ? LegacyRenderSVGShape::isEmpty() : m_fillBoundingBox.isEmpty(); }
+     bool isRenderingDisabled() const override;
++    bool strokeBoundsDependOnDashes() const override;
+     void fillShape(GraphicsContext&) const override;
+     void strokeShape(GraphicsContext&) const override;
+     bool shapeDependentStrokeContains(const FloatPoint&, PointCoordinateSpace = GlobalCoordinateSpace) override;
