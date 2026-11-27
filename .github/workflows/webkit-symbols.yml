@@ -1,0 +1,27 @@
+name: WebKit symbols from a cached build
+
+on:
+  workflow_dispatch:
+    inputs:
+      key:
+        description: Buildroot output cache key (br-output-…)
+        required: true
+
+jobs:
+  symbols:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Restore Buildroot output
+        id: output
+        uses: actions/cache/restore@v4
+        with:
+          path: /home/runner/br
+          key: ${{ inputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Upload WebKit symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: webkit-symbols
+          path: /home/runner/br/host/aarch64-buildroot-linux-gnu/sysroot/usr/lib/libWPEWebKit-2.0.so.1.*
+          retention-days: 14
