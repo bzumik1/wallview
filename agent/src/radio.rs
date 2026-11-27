@@ -36,6 +36,7 @@ const RETRY_MAX: Duration = Duration::from_secs(60);
 const KEEPALIVE_IDLE_S: i32 = 10;
 const KEEPALIVE_INTERVAL_S: i32 = 5;
 const KEEPALIVE_COUNT: i32 = 3;
+const USER_TIMEOUT_MS: i32 = 25_000;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -73,6 +74,7 @@ impl Mode {
 #[derive(Clone)]
 pub struct Radio {
     mode: Arc<Mutex<Mode>>,
+    store: Arc<Mutex<()>>,
     client: Arc<AtomicBool>,
     changes: Arc<AtomicU64>,
 }
@@ -83,7 +85,7 @@ impl Radio {
             .ok()
             .and_then(|text| Mode::from_id(text.trim()))
             .unwrap_or(Mode::Off);
-        Radio { mode: Arc::new(Mutex::new(mode)), client: Arc::new(AtomicBool::new(false)), changes: Arc::new(AtomicU64::new(0)) }
+        Radio { mode: Arc::new(Mutex::new(mode)), store: Arc::new(Mutex::new(())), client: Arc::new(AtomicBool::new(false)), changes: Arc::new(AtomicU64::new(0)) }
     }
 
     pub fn mode(&self) -> Mode {
@@ -93,6 +95,7 @@ impl Radio {
     /// Stores the mode (temporary file + rename) and applies it only if that worked, so the
     /// panel never runs a mode it would forget on the next boot.
     pub fn set_mode(&self, mode: Mode) {
+        let _store = self.store.lock().unwrap();
         if self.mode() == mode {
             return;
         }
@@ -192,11 +195,12 @@ fn check(result: libc::c_int) -> io::Result<()> {
     }
 }
 
-/// Opens the UART exclusively (`TIOCEXCL`, so nothing else can open it while the bridge runs)
-/// and raw at 115200 8N1 without hardware flow control. The factory EZSP firmware uses
-/// XON/XOFF: `IXON` lets the kernel pause sending when the radio asks for it (ASH escapes 0x11
-/// and 0x13 inside frames, so only real flow-control bytes are consumed). Reads return after
-/// 0.2 s without data, so the copy loops can notice a mode change.
+/// Opens the UART with `TIOCEXCL` (no further non-root opener while the bridge runs; root is not
+/// stopped, so it guards against accidents only) and raw at 115200 8N1 without any flow control.
+/// The factory EZSP firmware sends XON/XOFF; ASH escapes 0x11 and 0x13 inside frames, and the
+/// bytes are passed through to the host, which drops them. The kernel does not act on them, so
+/// a lost XON can never stop transmission. Reads return after 0.2 s without data, so the copy
+/// loops can notice a mode change.
 fn open_serial() -> io::Result<File> {
     let path = std::env::var(SERIAL_ENV).unwrap_or_else(|_| SERIAL.to_string());
     let file = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK).open(&path)?;
@@ -208,8 +212,7 @@ fn open_serial() -> io::Result<File> {
         libc::cfmakeraw(&mut termios);
         termios.c_cflag &= !(libc::CRTSCTS | libc::CSTOPB | libc::PARENB);
         termios.c_cflag |= libc::CLOCAL | libc::CREAD;
-        termios.c_iflag &= !(libc::IXOFF | libc::IXANY);
-        termios.c_iflag |= libc::IXON;
+        termios.c_iflag &= !(libc::IXON | libc::IXOFF | libc::IXANY);
         termios.c_cc[libc::VMIN] = 0;
         termios.c_cc[libc::VTIME] = 2;
         check(libc::cfsetispeed(&mut termios, libc::B115200))?;
@@ -222,12 +225,11 @@ fn open_serial() -> io::Result<File> {
     Ok(file)
 }
 
-/// Discards bytes the radio sent while no host was connected and resumes output in case an
-/// XOFF from an earlier session was never followed by XON.
-fn reset_serial(serial: &File) {
+/// Discards bytes left in both directions by an earlier session or sent by the radio while no
+/// host was connected.
+fn flush_serial(serial: &File) {
     unsafe {
-        libc::tcflush(serial.as_raw_fd(), libc::TCIFLUSH);
-        libc::tcflow(serial.as_raw_fd(), libc::TCOON);
+        libc::tcflush(serial.as_raw_fd(), libc::TCIOFLUSH);
     }
 }
 
@@ -245,7 +247,10 @@ fn set_keepalive(stream: &TcpStream) -> io::Result<()> {
     set(libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1)?;
     set(libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, KEEPALIVE_IDLE_S)?;
     set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, KEEPALIVE_INTERVAL_S)?;
-    set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, KEEPALIVE_COUNT)
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, KEEPALIVE_COUNT)?;
+    // Keepalive probes are not sent while data is unacknowledged, and the radio talks all the
+    // time: without this a vanished host would hold the bridge for many minutes.
+    set(libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, USER_TIMEOUT_MS)
 }
 
 /// Serves the UART to one TCP host at a time while the mode is Zigbee coordinator. Errors of a
@@ -257,16 +262,25 @@ fn bridge(radio: &Radio, node_name: &str, friendly_name: &str, serial_number: &s
     let _advertisement = Advertisement::start(node_name, friendly_name, serial_number);
     eprintln!("wallview-agent: radio: Zigbee bridge on port {BRIDGE_PORT}");
     let mut session: Option<Session> = None;
-
-    while radio.mode() == Mode::ZigbeeCoordinator {
+    let mut refused_logged: Vec<std::net::IpAddr> = Vec::new();
+    let reap = |session: &mut Option<Session>, refused_logged: &mut Vec<std::net::IpAddr>| {
         if session.as_ref().is_some_and(Session::finished) {
-            session.take().unwrap().stop();
+            session.take().unwrap().stop(&serial);
+            refused_logged.clear();
             eprintln!("wallview-agent: radio: Zigbee host disconnected");
         }
+    };
+
+    while radio.mode() == Mode::ZigbeeCoordinator {
+        reap(&mut session, &mut refused_logged);
         match listener.accept() {
             Ok((stream, peer)) => {
+                reap(&mut session, &mut refused_logged);
                 if session.is_some() {
-                    eprintln!("wallview-agent: radio: refused {peer}, another Zigbee host is connected");
+                    if !refused_logged.contains(&peer.ip()) && refused_logged.len() < 16 {
+                        eprintln!("wallview-agent: radio: refusing {}, another Zigbee host is connected", peer.ip());
+                        refused_logged.push(peer.ip());
+                    }
                     let _ = stream.shutdown(Shutdown::Both);
                     continue;
                 }
@@ -286,7 +300,7 @@ fn bridge(radio: &Radio, node_name: &str, friendly_name: &str, serial_number: &s
         }
     }
     if let Some(session) = session {
-        session.stop();
+        session.stop(&serial);
     }
     Ok(())
 }
@@ -310,7 +324,7 @@ impl Session {
         let mut to_serial = serial.try_clone()?;
         let mut to_client = stream.try_clone()?;
         let mut from_client = stream.try_clone()?;
-        reset_serial(serial);
+        flush_serial(serial);
         let stop = Arc::new(AtomicBool::new(false));
 
         let uplink_stop = stop.clone();
@@ -365,9 +379,13 @@ impl Session {
         self.stop.load(Ordering::SeqCst)
     }
 
-    fn stop(self) {
+    fn stop(self, serial: &File) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = self.stream.shutdown(Shutdown::Both);
+        // Unblocks a serial write in progress, so joining cannot hang.
+        unsafe {
+            libc::tcflush(serial.as_raw_fd(), libc::TCOFLUSH);
+        }
         for worker in self.workers {
             let _ = worker.join();
         }
