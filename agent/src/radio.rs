@@ -13,6 +13,7 @@ use mdns_sd::{ServiceDaemon, ServiceInfo};
 const SERIAL: &str = "/dev/ttyS5";
 const SERIAL_ENV: &str = "WALLVIEW_RADIO_SERIAL";
 const MODE_FILE: &str = "/data/wallview/radio-mode";
+const FLOW_CONTROL_FILE: &str = "/data/wallview/radio-flow-control";
 pub const BRIDGE_PORT: u16 = 6638;
 const SERVICE_TYPE: &str = "_zigbee-coordinator._tcp.local.";
 const IDLE: Duration = Duration::from_millis(500);
@@ -180,8 +181,14 @@ fn check(result: libc::c_int) -> io::Result<()> {
     }
 }
 
+fn hardware_flow_control() -> bool {
+    fs::read_to_string(FLOW_CONTROL_FILE).map(|value| value.trim() == "hardware").unwrap_or(false)
+}
+
 fn open_serial() -> io::Result<File> {
     let path = std::env::var(SERIAL_ENV).unwrap_or_else(|_| SERIAL.to_string());
+    let hardware_flow = hardware_flow_control();
+    eprintln!("wallview-agent: radio: {path}, flow control {}", if hardware_flow { "hardware" } else { "none" });
     let file = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK).open(&path)?;
     let fd = file.as_raw_fd();
     unsafe {
@@ -190,6 +197,9 @@ fn open_serial() -> io::Result<File> {
         check(libc::tcgetattr(fd, &mut termios))?;
         libc::cfmakeraw(&mut termios);
         termios.c_cflag &= !(libc::CRTSCTS | libc::CSTOPB | libc::PARENB);
+        if hardware_flow {
+            termios.c_cflag |= libc::CRTSCTS;
+        }
         termios.c_cflag |= libc::CLOCAL | libc::CREAD;
         termios.c_iflag &= !(libc::IXON | libc::IXOFF | libc::IXANY);
         termios.c_cc[libc::VMIN] = 0;
@@ -197,6 +207,10 @@ fn open_serial() -> io::Result<File> {
         check(libc::cfsetispeed(&mut termios, libc::B115200))?;
         check(libc::cfsetospeed(&mut termios, libc::B115200))?;
         check(libc::tcsetattr(fd, libc::TCSANOW, &termios))?;
+        let rts: libc::c_int = libc::TIOCM_RTS;
+        if libc::ioctl(fd, libc::TIOCMBIS, &rts) < 0 {
+            eprintln!("wallview-agent: radio: cannot raise RTS: {}", io::Error::last_os_error());
+        }
         let flags = libc::fcntl(fd, libc::F_GETFL);
         check(flags)?;
         check(libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK))?;
