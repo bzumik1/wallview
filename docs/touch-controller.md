@@ -355,7 +355,7 @@ Risks, highest first:
 - Mainline driver: `drivers/input/touchscreen/hynitron_cstxxx.c`, our patch `kernel/patches/0002-input-hynitron-cstxxx-add-cst226se.patch`
 - Vendor functions (addresses in the vendor `Image`): `cst2xx_check_code` `0xffffff80086b42f0`, `hard_reset_chip` `0xffffff80086b39fc`, `cst3xx_esd_check_func` `0xffffff80086b3f34`, `hyn_ts_probe` `0xffffff80086b4a10`
 - Measurements: `docs/performance.md` ("Touch controller report rate"), `docs/test-log.md`
-- Datasheets read (kept on the Mac in `local/`, not committed): Hynitron CST328, CST340 DataSheet V2.3, CST3240 Application Manual; see "What the datasheets say" below
+- Not obtained: Hynitron CST328 / CST340 / CST3240 datasheets and application manual (buydisplay.com refuses automated download)
 
 ## Unpressed reports and false lifts (2026-11-27)
 
@@ -368,32 +368,3 @@ A raw capture with the driver unbound (`tools/perf/captures/touch-raw-2026-11-27
 The mainline driver drops a contact on any read where its status is not pressed, so all of these became lifts. `kernel/patches/0006-input-hynitron-cstxxx-keep-contact-across-unpressed-reports.patch` keeps an active contact, without a new position, for up to two consecutive unpressed reads: the 15 single-read false lifts disappear, and a real lift is reported one read (about 20 ms) later. A failed read (I²C error or wrong check byte) releases any contact that is being kept, so a lost read can never leave a finger pressed; a third unpressed read in a row drops it as before. The patch was reviewed (Fable 5.2, 2026-11-27): safe for a trial; watch `dmesg` for `cst3xx touch read failure` next to stuck presses. Separately, the existing finger id check (`max_touch_num < finger_id`) lets id 5 through with 5 slots; worth its own fix. Replaying the capture with `REPLAY_KEEP_UNPRESSED=1` (`buildroot/board/wallview/touch/wallview-touch-replay.c`) models the patch: raw touch-downs go from 81 to 65. The remaining false lifts cannot be told from real ones when they happen; `wallview-touch` can only bridge them by holding releases, which delays every real lift of a moving finger.
 
 Way back: drop the patch and rebuild, or boot the previous kernel.
-
-## What the datasheets say (2026-11-27)
-
-Read: CST328 datasheet, CST340 DataSheet V2.3, CST3240 Application Manual. None of them is for the CST226SE, but all share its core (Cortex-M0, 24 KB ROM) and the CST3240 manual describes the same I²C protocol.
-
-- Protocol matches ours: touch read at `0xD000` (7 bytes per point), acknowledge by writing `0xD000 0xAB`, finger state `0x06` pressed and `0x00` released, byte 6 of a point is `0xAB`. Mode commands are writes of `0xD1 xx`: `01` debug info, `04` recalibration, `09` normal, `0A` raw data, `0D` diff, `19` factory. The info block at `0xD1F4`–`0xD20C` (TX/RX counts, resolution, version, checksum) is described as we read it.
-- CST3240: the controller does "Noise Listening" and "Frequency Hopping": it listens for interference and moves the scan to another frequency. This is the most likely cause of the irregular coordinate intervals (13–40 ms, sometimes up to 200 ms).
-- CST340: "typical refresh rate 100 Hz". Work modes Dynamic (fast scanning while touched) and Monitor (slower mutual-capacitance scanning after a timeout without touch, quick return on touch), so the first touch after idle can be slower. Timeout and control of these modes are not documented. TX drive up to 350 kHz.
-- CST340 pages 11–12 describe a different register protocol (`0x814E…`, Goodix style) that the CST226SE does not use.
-- No document gives a report-rate command, scan parameters, debounce, or the meaning of the configuration bytes; these are vendor tuning data.
-
-## Factory test not used (2026-11-27)
-
-The plan was to measure noise with the raw or diff modes. Static analysis of the vendor Android driver and the flash firmware ruled it out:
-
-- The vendor driver never uses a factory, raw or diff mode. It sends only `0xD106` at probe, `0xD105` at suspend, `0xD109` plus a check during the ESD watchdog, and ordinary touch reads. It never sends `0xD102`.
-- The flash part of the firmware serves only an 81-byte buffer at `0xD000`–`0xD050`; a 13×8 node map needs 208 bytes. Whatever `0xD101`/`0xD102` do lives in ROM, which we cannot read, and `0xD1F0`/`0xD220` writes with data reach flash. Running those modes could return nothing and might write calibration to flash, so they were not run.
-
-## Frame counter at 0xD040 (2026-11-27)
-
-`0xD040` holds a 32-bit big-endian frame counter with a check value, read-only, that increments on every scan. Two reads give the true scan rate from the chip, also without touch and independent of interrupts. `tools/perf/touchprobe.c` reads it optionally (commit `b05e29b`, reviewed). Captures on branch `claude/project-thread-3bjdnn`: `tools/perf/captures/touch-counter-idle-2026-11-27.txt` and `touch-counter-finger-2026-11-27.txt` (driver unbound for 45 s, vendor firmware, nothing written).
-
-| State | Scans per second | Interrupts per second |
-|---|---|---|
-| No touch | 83 (12 ms) | 0 |
-| Finger resting | about 38 (26 ms) | about 38 |
-| Slow circles | 48–53 | 42–44 |
-
-A scan with a finger takes about twice as long as an idle scan, so the scan length is not what limits the report rate; that is why changing `cfg[0x66]` and `cfg[0xb4]` did not help. The extra time is work done only while touched. The leading suspect is the noise logic in the flash firmware (around `0x068a` and `0x09fc`, with a ROM delay call taking 5000 and thresholds 1000 and 6000); the coordinate filter in ROM is the other. Next step: static analysis of that logic to find how much time it adds and what controls it, before any firmware experiment. A 100 Hz report rate needs touched scans of about 10 ms.
