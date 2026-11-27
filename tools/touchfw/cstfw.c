@@ -377,8 +377,10 @@ flash(const char *path, int recover, uint32_t current)
 
     struct sched_param param = { .sched_priority = 50 };
 
-    sched_setscheduler(0, SCHED_FIFO, &param);
-    mlockall(MCL_CURRENT | MCL_FUTURE);
+    if (sched_setscheduler(0, SCHED_FIFO, &param))
+        printf("SCHED_FIFO not set: %s\n", strerror(errno));
+    if (mlockall(MCL_CURRENT | MCL_FUTURE))
+        printf("mlockall failed: %s\n", strerror(errno));
 
     int erased = 0;
 
@@ -397,8 +399,10 @@ flash(const char *path, int recover, uint32_t current)
                     break;
                 sleep_ms(waits[i]);
                 if (info_read(chip, 1) == 0 && memcmp(chip, ident, sizeof(ident)) == 0 &&
-                    le32(chip + 24) == le32(img + 0x1dfc))
+                    le32(chip + 24) == le32(img + 0x1dfc)) {
+                    printf("cstfw: done and verified, checksum 0x%08x\n", le32(chip + 24));
                     return 0;
+                }
             }
             fprintf(stderr, "cstfw: the new application does not answer as expected\n");
             return 4;
