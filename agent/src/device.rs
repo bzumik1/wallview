@@ -112,7 +112,7 @@ impl Device {
     }
 
     pub fn restart_kiosk(&self) {
-        let _ = Command::new("killall").args(["wallview-browser", "cog"]).status();
+        let _ = Command::new("killall").args(["wallview-browser", "cog", "cage"]).status();
     }
 
     pub fn request_sign_in(&self) {

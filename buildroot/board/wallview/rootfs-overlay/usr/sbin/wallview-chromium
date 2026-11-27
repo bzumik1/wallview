@@ -1,0 +1,87 @@
+#!/bin/sh
+set -e
+
+ROOT=/run/chromium
+DATA=/run/wallview-browser
+EROFS_MAGIC=e2e1f5e0
+MARKER=.wallview-browser
+PROFILE=$DATA/chromium/Default
+ZOOM_150_PERCENT=2.223901085741545
+
+partition() {
+	for uevent in /sys/class/block/*/uevent; do
+		grep -qx "PARTNAME=$1" "$uevent" && sed -n 's/^DEVNAME=//p' "$uevent"
+	done | head -n 1
+}
+
+installed() {
+	system=$(partition system)
+	[ -n "$system" ] || return 1
+	[ "$(dd if="/dev/$system" bs=1 skip=1024 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "$EROFS_MAGIC" ]
+}
+
+mount_data() {
+	mountpoint -q "$DATA" && return 0
+	userdata=$(partition userdata)
+	[ -n "$userdata" ] || { echo "wallview-chromium: no userdata partition" >&2; return 1; }
+	mkdir -p "$DATA"
+	if mount -t ext4 -o noatime "/dev/$userdata" "$DATA" 2>/dev/null; then
+		[ -f "$DATA/$MARKER" ] && return 0
+		umount "$DATA"
+	fi
+	echo "wallview-chromium: formatting $userdata for the browser profile" >&2
+	mkfs.ext4 -q -F -L wallview-browser "/dev/$userdata"
+	mount -t ext4 -o noatime "/dev/$userdata" "$DATA"
+	touch "$DATA/$MARKER"
+}
+
+seed_profile() {
+	[ -f "$PROFILE/Preferences" ] && return 0
+	mkdir -p "$PROFILE"
+	printf '{"partition":{"default_zoom_level":{"x":%s}}}\n' "$ZOOM_150_PERCENT" > "$PROFILE/Preferences"
+}
+
+bind() {
+	mkdir -p "$2"
+	mountpoint -q "$2" || mount --bind "$1" "$2"
+}
+
+prepare() {
+	installed || { echo "wallview-chromium: no Chromium image in the system partition" >&2; return 1; }
+	mkdir -p "$ROOT"
+	mountpoint -q "$ROOT" || mount -t erofs -o ro "/dev/$(partition system)" "$ROOT"
+	for dir in dev proc sys; do
+		mountpoint -q "$ROOT/$dir" || mount -o rbind "/$dir" "$ROOT/$dir"
+	done
+	for dir in run tmp root var/tmp; do
+		mountpoint -q "$ROOT/$dir" || mount -t tmpfs -o mode=0755 tmpfs "$ROOT/$dir"
+	done
+	chmod 1777 "$ROOT/tmp" "$ROOT/var/tmp"
+	mkdir -p /run/udev
+	bind /run/udev "$ROOT/run/udev"
+	touch "$ROOT/run/resolv.conf"
+	mount --bind /run/resolv.conf "$ROOT/run/resolv.conf" 2>/dev/null || true
+	bind /usr/share/wallview "$ROOT/usr/share/wallview"
+	mount_data
+	seed_profile
+	bind "$DATA" "$ROOT/data"
+	rm -f "$ROOT/run/seatd.sock"
+}
+
+run() {
+	prepare
+	extra=$(cat /data/wallview/chromium-args 2>/dev/null || true)
+	exec chroot "$ROOT" /usr/bin/env -i HOME=/root XDG_RUNTIME_DIR=/run/xdg LANG="${LANG:-en_US.UTF-8}" PATH=/usr/bin:/bin \
+		/bin/sh -c 'mkdir -p -m 0700 /run/xdg && exec seatd-launch -- cage -- chromium \
+			--ozone-platform=wayland --kiosk --app="$0" --no-first-run --no-sandbox --noerrdialogs \
+			--user-data-dir=/data/chromium --disk-cache-dir=/tmp/chromium-cache \
+			--ignore-gpu-blocklist --enable-gpu-rasterization \
+			--disable-web-security --allow-file-access-from-files \
+			'"$extra"'' "$1"
+}
+
+case "$1" in
+installed) installed ;;
+run) run "${2:?usage: wallview-chromium run <url>}" ;;
+*) echo "usage: wallview-chromium installed|run <url>" >&2; exit 2 ;;
+esac

@@ -30,7 +30,7 @@ show)
 url | language | cog-args)
 	[ $# -ge 3 ] || usage
 	printf '%s\n' "$3" | write_setting "$ACTION"
-	panel 'killall wallview-browser cog 2>/dev/null; true'
+	panel 'killall wallview-browser cog cage 2>/dev/null; true'
 	;;
 mqtt)
 	[ $# -ge 6 ] || usage
