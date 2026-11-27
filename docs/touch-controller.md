@@ -330,6 +330,16 @@ Results:
 
 `cfg[0x66]` = 10 speeds up reporting with a finger at rest but not while it moves, and the slow tail (p90 40–50 ms) stays. It is not the active scan period. The circling capture on the try image was short and its speed not controlled, so that row is weak. Both flashes rc 0 on the first attempt; the vendor image is back and verified. Next candidates: `cfg[0xb4]` (u16 339) and the fields at 0x1668/0x1669.
 
+Experiment 2, 2026-11-27, `cfg[0xb4]` (0x16b8, u16) 339 → 170, checksum 0x99630d98, one 40 s scripted capture per image:
+
+| window | vendor | `cfg[0xb4]` = 170 |
+|---|---|---|
+| no touch | not captured (capture started late) | 0 INT, 0 ghost reads |
+| finger still | INT median / p90 / max 18.6 / 28.7 / 53.8 ms, position spread 0 | no touch detected at all |
+| circling | INT 15.6 / 32.9 / 107 ms; new position median / p90 16.4 / 41.6 ms (858 positions) | first touch about 3 s late, then the position froze for about 15 s; INT 26.5 / 35.7 / 76.5 ms; new position 22.0 / 33.3 ms (85 positions) |
+
+`cfg[0xb4]` = 170 makes the front end far less sensitive (likely gain, integration or a threshold, not the scan period); unusable. The try image answered `info` with a different chip identification (0xD204 read `01 00 00 00`), so the normal revert `flash` refused with rc 3 and wrote nothing; `recover` with the vendor image then succeeded on the first attempt (verified 0x99630e41), which is the first live run of `recover`. End state: seven vendor `info` rows, `boot-checksum` 0x99630e41, no marker. Pausing the kiosk with SIGSTOP of the S99 loop and the browser processes (resumed with SIGCONT) keeps the Home Assistant session; terminating the browser can bring up a sign-in screen.
+
 Measuring with a person at the panel works best as one capture with a fixed script read out beforehand (for example 40 s: 0–10 s no touch, 10–20 s finger still, 20–40 s circling), started by the person and split by time afterwards. Step-by-step prompts over chat arrive late and mix up the captures.
 
 Risks, highest first:
