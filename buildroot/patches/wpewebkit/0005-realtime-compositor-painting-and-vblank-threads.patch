@@ -14,6 +14,11 @@ DisplayLink. On the NSPanel (4 cores, HZ=250, web process main thread at
 WorkerPool has no QoS parameter, so the painting workers register
 themselves with RealTimeThreads when they run their first task.
 
+The vblank thread is destroyed 30 s after the display link stops and
+created again on the next start; registering it with RealTimeThreads
+from the UI process left it at SCHED_OTHER on the panel, so it sets
+SCHED_RR itself when it starts.
+
 Upstream-Status: Pending
 ---
 --- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/CompositingRunLoop.cpp
@@ -29,15 +34,24 @@ Upstream-Status: Pending
  {
 --- a/Source/WebKit/WPEPlatform/wpe/WPEScreenSyncObserverDRM.cpp
 +++ b/Source/WebKit/WPEPlatform/wpe/WPEScreenSyncObserverDRM.cpp
-@@ -145,7 +145,7 @@
-                     priv->state = State::Failed;
-                 }
-             }
--        }, ThreadType::Graphics, Thread::QOS::Default);
-+        }, ThreadType::Graphics, Thread::QOS::UserInteractive);
-     } else
-         priv->condition.notifyAll();
- }
+@@ -29,6 +29,7 @@
+ #include <chrono>
+ #include <errno.h>
+ #include <fcntl.h>
++#include <sched.h>
+ #include <thread>
+ #include <wtf/Condition.h>
+ #include <wtf/Function.h>
+@@ -109,6 +110,9 @@
+     if (!priv->thread) {
+         priv->thread = Thread::create("WPEScreenSyncObserverDRM"_s, [observer] {
+             auto* priv = WPE_SCREEN_SYNC_OBSERVER_DRM(observer)->priv;
++            struct sched_param param = { };
++            param.sched_priority = 5;
++            sched_setscheduler(0, SCHED_RR | SCHED_RESET_ON_FORK, &param);
+             while (true) {
+                 {
+                     Locker locker { priv->lock };
 --- a/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.cpp
 +++ b/Source/WebCore/platform/graphics/skia/SkiaPaintingEngine.cpp
 @@ -45,6 +45,10 @@

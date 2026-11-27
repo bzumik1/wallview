@@ -159,6 +159,17 @@ Missed vblanks in the drag window (% of 288 per value, each value 2 runs of 8 sw
 
 All seven patches are in the build. Two runtime switches allow A/B measurements with one image (environment of `wallview-browser`, inherited by the web process): `WALLVIEW_WEBKIT_NO_SCROLL_COMMIT=1` restores the old behaviour of `0004` (and so disables `0007`), `WALLVIEW_WEBKIT_TILE_DEFER=<frames>` sets the deferral limit of `0006` (default 2, `0` waits for every tile as before). To build a library locally the Lima VM has a configured tree (`~/build/wk2`: `orig` pristine, `src` with the patches, `build` configured like CI); one WebCore unified source needs about 2.5 GB of compiler memory, so the 10 GB VM can run 3 jobs at most. A library can be tried without installing it: copy `libWPEWebKit-2.0.so.1` and the `libWPEPlatform*` libraries to `/tmp/<dir>` and start the kiosk loop with `LD_LIBRARY_PATH=/tmp/<dir>`.
 
+Measured with the CI image of PR #9 (all seven patches, 2026-11-27), switches as above, vblank thread set to `SCHED_RR` 5 with `chrt` right before each run (the image's `0005` did not promote it, fixed since). Missed vblanks in the drag window, two interleaved rounds of 8 swipes per value, total in brackets:
+
+| Configuration | climate | settings | lights |
+|---|---|---|---|
+| all patches | 3.8 / 13.7 (8.7) | 36.5 / 46.8 (41.7) | 0.7 / 3.3 (2.0) |
+| `WALLVIEW_WEBKIT_TILE_DEFER=0` (no `0006`) | 12.2 / 15.5 (13.8) | 36.8 / 39.7 (38.3) | 1.3 / 3.3 (2.3) |
+| `WALLVIEW_WEBKIT_NO_SCROLL_COMMIT=1` (no `0004`, `0007`) | 5.9 / 7.6 (6.8) | 49.4 / 40.0 (44.7) | 4.6 / 5.8 (5.2) |
+| both switches (real-time threads only) | 14.8 / 28.4 (21.6) | 34.2 / 47.7 (41.0) | 5.9 / 6.5 (6.2) |
+
+The patches together cut climate from 21.6 to 8.7 % and lights from 6.2 to 2.0 %. Settings stays at about 40 % in every configuration, so it has another limit: the compositor runs at every vblank (4–7 ms), but every other frame is skipped because the previous one has not been presented yet. Settings is the only view with a composited `canvas` layer (layer tree: 17 layers, reasons include `canvas` and `transform3D`); that layer is the next suspect. No view repaints at rest. Timeline: `out/debug/settings-trace.txt` (not in git).
+
 What stays on the main thread during a swipe and what it costs (climate, 100 % of one core): every touch move is sent to the page (`WebPageProxy::updateTouchEventTracking()` is `Synchronous` for everything outside Cocoa), i.e. touch and pointer event dispatch with `EventPath` and hit tests, every wheel event is dispatched to the DOM because of the passive `wheel` listener (`dispatchWheelEventViaMainThread()`), and every scroll position runs `RenderLayer::updateLayerPosition` / `recursiveUpdateLayerPositionsAfterScroll`. None of this blocks a frame once 1–4 are fixed, but it produces the tile repaints of cause 3 and keeps one core busy.
 
 ## Tried and dropped
