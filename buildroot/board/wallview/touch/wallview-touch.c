@@ -706,9 +706,9 @@ load_options(struct options *options)
 
     *options = (struct options){
         .period = NSEC_PER_SEC / (rate >= 2 && rate <= 1000 ? rate : 120),
-        .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 8),
-        .max_prediction = env_ms("WALLVIEW_TOUCH_PREDICTION_MS", 12),
-        .max_sample_gap = env_ms("WALLVIEW_TOUCH_MAX_GAP_MS", 60),
+        .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 16),
+        .max_prediction = env_ms("WALLVIEW_TOUCH_PREDICTION_MS", 30),
+        .max_sample_gap = env_ms("WALLVIEW_TOUCH_MAX_GAP_MS", 150),
         .lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 100),
         .rejoin_min = (int)env_number("WALLVIEW_TOUCH_REJOIN_PX", 30),
         .rejoin_slack = env_number("WALLVIEW_TOUCH_REJOIN_SLACK", 0.75),

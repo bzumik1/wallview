@@ -39,7 +39,7 @@ static void run_until(int64_t t) { while (clock_t0 + o.period <= t) { clock_t0 +
 static void reset(void) { memset(contacts, 0, sizeof contacts); downs = ups = 0; maxstep = 0; maxstill = 0; still_since = 0; lastx = -1; memset(down_now, 0, sizeof down_now); }
 static void defaults(void) {
 	setenv("WALLVIEW_TOUCH_LIFT_MS", "", 1);
-	o = (struct options){ .period = NSEC_PER_SEC / 120, .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 8), .max_prediction = 12 * MS, .max_sample_gap = 60 * MS,
+	o = (struct options){ .period = NSEC_PER_SEC / 120, .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 16), .max_prediction = 30 * MS, .max_sample_gap = 150 * MS,
 		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 100), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 12, .start_travel = 8, .hold_speed = 60, .start_speed = 150,
 		.hold_recent = 100 * MS, .coast = 40 * MS, .coast_after = 40 * MS, .coast_max = 40, .coast_speed = 150, .blend = 0.7, .debug = getenv("DBG") != NULL };
 }
