@@ -37,6 +37,7 @@ struct contact {
     int samples;
     int emitted_x;
     int emitted_y;
+    int predicted;
 };
 
 struct options {
@@ -48,6 +49,9 @@ struct options {
 
 static struct contact contacts[MAX_SLOTS];
 static int output;
+static int timer;
+static int timer_armed;
+static int64_t period;
 static struct input_event pending[256];
 static int pending_count;
 
@@ -107,6 +111,19 @@ emit_position(int slot, int x, int y)
 }
 
 static void
+arm_timer(int on)
+{
+    struct itimerspec spec = { 0 };
+
+    if (on == timer_armed)
+        return;
+    if (on)
+        spec.it_interval.tv_nsec = spec.it_value.tv_nsec = period;
+    timerfd_settime(timer, 0, &spec, NULL);
+    timer_armed = on;
+}
+
+static void
 add_sample(struct contact *c, int64_t time)
 {
     if (c->samples == HISTORY) {
@@ -132,25 +149,42 @@ handle_frame(int64_t time)
             queue(EV_ABS, ABS_MT_TOUCH_MAJOR, c->major);
             c->emitted_x = -1;
             c->emitted_y = -1;
+            c->predicted = 0;
             if (first_active() == slot)
                 queue(EV_KEY, BTN_TOUCH, 1);
             emit_position(slot, c->x, c->y);
             c->dirty = 0;
         } else if (c->ended) {
+            int first = first_active() == slot;
+
             c->ended = 0;
-            emit_position(slot, c->x, c->y);
+            /*
+             * A predicted position is ahead of the last real sample along
+             * the motion. Moving back to that sample right at release would
+             * be a last move against the swipe and spoil the fling velocity,
+             * so the contact is released where it was shown.
+             */
+            if (!c->predicted)
+                emit_position(slot, c->x, c->y);
             queue(EV_ABS, ABS_MT_SLOT, slot);
             queue(EV_ABS, ABS_MT_TRACKING_ID, -1);
             c->active = 0;
             c->dirty = 0;
-            if (first_active() < 0)
+            int next = first_active();
+
+            if (next < 0) {
                 queue(EV_KEY, BTN_TOUCH, 0);
+            } else if (first) {
+                queue(EV_ABS, ABS_X, contacts[next].emitted_x);
+                queue(EV_ABS, ABS_Y, contacts[next].emitted_y);
+            }
         } else if (c->dirty) {
             c->dirty = 0;
             add_sample(c, time);
         }
     }
     flush();
+    arm_timer(first_active() >= 0);
 }
 
 static int
@@ -177,6 +211,8 @@ resample(const struct options *options, int64_t now)
         int x = last->x;
         int y = last->y;
 
+        c->predicted = 0;
+
         if (target < last->time) {
             for (int i = c->samples - 1; i > 0; i--) {
                 struct sample *a = &c->history[i - 1];
@@ -191,12 +227,25 @@ resample(const struct options *options, int64_t now)
         } else if (c->samples >= 2) {
             struct sample *a = &c->history[c->samples - 2];
             int64_t ahead = target - last->time;
+            int64_t limit = (last->time - a->time) / 2;
 
-            if (ahead > options->max_prediction)
-                ahead = options->max_prediction;
-            if (last->time - a->time <= options->max_sample_gap && ahead > 0) {
+            /*
+             * The kernel sends nothing while a finger rests (unchanged
+             * values are filtered), so a missing sample means the finger
+             * slowed down or stopped. Predict at most half a sample interval
+             * ahead (as Android does) and, once no sample has come for
+             * max_sample_gap, settle on the last real position instead of
+             * holding an overshoot for as long as the finger stays down.
+             */
+            if (limit > options->max_prediction)
+                limit = options->max_prediction;
+            if (ahead > limit)
+                ahead = limit;
+            if (last->time - a->time <= options->max_sample_gap && ahead > 0 &&
+                target - last->time <= options->max_sample_gap) {
                 x = interpolate(a->x, last->x, a->time, last->time, last->time + ahead);
                 y = interpolate(a->y, last->y, a->time, last->time, last->time + ahead);
+                c->predicted = x != last->x || y != last->y;
             }
         }
         emit_position(slot, x, y);
@@ -313,8 +362,9 @@ int
 main(int argc, char **argv)
 {
     const char *device = argc > 1 ? argv[1] : NULL;
+    int rate = getenv("WALLVIEW_TOUCH_RATE") ? atoi(getenv("WALLVIEW_TOUCH_RATE")) : 120;
     struct options options = {
-        .period = NSEC_PER_SEC / (getenv("WALLVIEW_TOUCH_RATE") ? atoi(getenv("WALLVIEW_TOUCH_RATE")) : 120),
+        .period = NSEC_PER_SEC / (rate > 0 ? rate : 120),
         .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 8),
         .max_prediction = env_ms("WALLVIEW_TOUCH_PREDICTION_MS", 12),
         .max_sample_gap = env_ms("WALLVIEW_TOUCH_MAX_GAP_MS", 60),
@@ -340,13 +390,9 @@ main(int argc, char **argv)
 
     sched_setscheduler(0, SCHED_FIFO, &param);
 
-    int timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
-    struct itimerspec spec = {
-        .it_interval = { 0, options.period },
-        .it_value = { 0, options.period },
-    };
-
-    timerfd_settime(timer, 0, &spec, NULL);
+    /* The timer only runs while a finger is down, so an idle panel is not woken 120 times a second. */
+    period = options.period;
+    timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
 
     int slot = 0;
     struct pollfd fds[2] = { { input, POLLIN, 0 }, { timer, POLLIN, 0 } };
