@@ -88,18 +88,22 @@ w3(uint8_t a, uint8_t b, uint8_t c)
 static int
 wr5(const uint8_t *buf, int len)
 {
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 5; i++) {
         if (wr(buf, len) == 0)
             return 0;
+        sleep_ms(2);
+    }
     return -1;
 }
 
 static int
 rd5(uint16_t reg, uint8_t *buf, int len)
 {
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 5; i++) {
         if (rd(reg, buf, len) == 0)
             return 0;
+        sleep_ms(2);
+    }
     return -1;
 }
 
@@ -299,7 +303,7 @@ flash_once(const uint8_t *img)
         return -2;
     }
     if (w3r(0xa0, 0x06, 0x00))
-        return -1;
+        printf("A0 06 00 not acknowledged (continuing, as the vendor driver does)\n");
     for (int page = 0; page < IMAGE_SIZE / PAGE_SIZE; page++) {
         int offset = page * PAGE_SIZE;
         uint8_t sel[4] = { 0xa0, 0x14, offset & 0xff, offset >> 8 };
@@ -330,8 +334,10 @@ flash_once(const uint8_t *img)
         printf("page %2d/%d written\n", page + 1, IMAGE_SIZE / PAGE_SIZE);
         fflush(stdout);
     }
-    if (w3r(0xa0, 0x01, 0x00) || w3r(0xa0, 0x03, 0x00))
+    if (w3r(0xa0, 0x01, 0x00))
         return -1;
+    if (w3r(0xa0, 0x03, 0x00))
+        printf("A0 03 00 not acknowledged (continuing, as the vendor driver does)\n");
     sleep_ms(10);
     ok = 0;
     for (int i = 0; i < 10 && !ok; i++) {
