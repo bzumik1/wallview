@@ -20,7 +20,7 @@ The panel identifies itself honestly: manufacturer "WallView", model "Sonoff NSP
 
 | Entity | Type | Source / action |
 |---|---|---|
-| Display | light (brightness) | `/sys/class/backlight/backlight`; setting a brightness turns Auto brightness off |
+| Display | light (brightness) | `/sys/class/backlight/backlight`; setting a brightness turns Auto brightness off, effect `Auto` turns it on |
 | Auto brightness | switch | `/data/wallview/brightness`: off (default) or on, see [Display brightness](#display-brightness) |
 | Auto brightness minimum, maximum | numbers, %, config | the range Auto brightness stays in (default 5 % and 100 %) |
 | Presence | binary sensor (occupancy) | proximity sensor above a threshold (hand in front of the panel) |
@@ -44,15 +44,19 @@ Presence changes are sent immediately, sensors every 15 s, commands answer with 
 
 ## Display brightness
 
-Manual: the Display light's brightness is the backlight's PWM duty (`brightness` of `max_brightness`). Choosing a brightness in Home Assistant (or over MQTT) switches Auto brightness off, so the value stays where it was set. Turning the light on or off does not change the mode.
+Manual: the Display light's brightness is the backlight's `brightness` of `max_brightness`. Choosing a brightness in Home Assistant (or over MQTT) switches Auto brightness off, so the value stays where it was set. Turning the light on or off does not change the mode. Transitions (`transition:`) are not applied yet; the brightness changes at once.
 
-Auto: with the Auto brightness switch on, the agent reads the light sensor every 0.5 s and sets the backlight from it:
+Auto: the Auto brightness switch, or the Display light's effect `Auto` (effect `None` is manual). The effect lets a scene keep the mode: a scene saved while auto was on restores auto and ignores its stored brightness, one saved in manual mode restores that brightness. Any other command with a brightness (an automation with `brightness_pct`, a light profile, Adaptive Lighting) switches auto off. With auto on, the agent reads the light sensor every 0.5 s and sets the backlight from it:
 - the illuminance is mapped logarithmically from 1 lx (dark, the minimum) to 300 lx (bright, the maximum), and smoothed (exponential average, about 4 s);
-- the target moves only when it differs by more than 3 % of perceived brightness, so a passing shadow or a flickering lamp does not make the display pulse;
-- the backlight follows in small steps every 50 ms (the whole range in about 2.5 s), on a square-law curve, so the steps look even to the eye; it never goes below a duty of 1, so the display is never fully dark;
+- the target moves only when it differs by more than 3 % of perceived brightness, so a passing shadow or a flickering lamp does not make the display pulse; a new minimum or maximum applies at once;
+- the backlight follows in small steps every 50 ms (the whole range in about 2.5 s) and never goes below a `brightness` of 1;
 - Home Assistant gets the Display brightness when a ramp ends, not every step.
 
-The minimum and maximum are percent of the PWM duty, as the Display light's brightness. The settings are stored in `/data/wallview/brightness` (`auto=on|off`, `minimum=`, `maximum=`) and survive a reboot. The lux readings of the `stk3310` are uncalibrated (raw × 0.1, see `test-log.md` 2026-11-25); 1 lx and 300 lx are constants in `agent/src/brightness.rs`.
+The steps look even to the eye on either kind of backlight: when the kernel reports `scale` as `non-linear` (mainline `pwm-backlight` without `brightness-levels` builds a CIE 1931 table), `brightness` is already perceptual and is used as it is; with a `linear` scale the agent applies a square law.
+
+The minimum and maximum are percent of `max_brightness`, as the Display light's brightness. Raising the minimum above the maximum raises the maximum with it, and the other way round. The settings are stored in `/data/wallview/brightness` (`auto=on|off`, `minimum=`, `maximum=`) and survive a reboot. The lux readings of the `stk3310` are uncalibrated (raw × 0.1, see `test-log.md` 2026-11-25); 1 lx and 300 lx are constants in `agent/src/brightness.rs`.
+
+Over MQTT only the manual brightness is available; the light's state follows the auto ramps.
 
 ## Zigbee and Thread
 

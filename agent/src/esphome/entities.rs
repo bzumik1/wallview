@@ -35,6 +35,9 @@ pub const AUTO_BRIGHTNESS: u32 = 19;
 pub const AUTO_BRIGHTNESS_MINIMUM: u32 = 20;
 pub const AUTO_BRIGHTNESS_MAXIMUM: u32 = 21;
 
+const NO_EFFECT: &str = "None";
+const AUTO_EFFECT: &str = "Auto";
+
 pub type Encoded = (u16, Vec<u8>);
 
 fn encode(message_type: u16, message: impl Message) -> Encoded {
@@ -77,6 +80,7 @@ pub fn list() -> Vec<Encoded> {
             key: DISPLAY,
             name: "Display".into(),
             supported_color_modes: vec![ColorMode::Brightness as i32],
+            effects: vec![NO_EFFECT.into(), AUTO_EFFECT.into()],
             icon: "mdi:tablet-dashboard".into(),
             ..Default::default()
         },
@@ -243,6 +247,7 @@ pub fn display_state(device: &Device) -> Encoded {
             state: device.backlight_on(),
             brightness: device.brightness() as f32 / max,
             color_mode: ColorMode::Brightness as i32,
+            effect: if device.brightness_control.settings().auto { AUTO_EFFECT } else { NO_EFFECT }.into(),
             ..Default::default()
         },
     )
@@ -365,7 +370,13 @@ pub fn handle_light(device: &Device, data: &[u8]) -> Option<Encoded> {
     if command.key != DISPLAY {
         return None;
     }
-    if command.has_brightness {
+    let auto = command.has_effect && command.effect == AUTO_EFFECT;
+    if auto {
+        device.brightness_control.set_auto(true);
+    } else if command.has_effect {
+        device.brightness_control.set_auto(false);
+    }
+    if command.has_brightness && !auto {
         let max = device.max_brightness() as f32;
         device.set_brightness((command.brightness.clamp(0.0, 1.0) * max).round() as u32);
     }

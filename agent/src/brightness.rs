@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -10,6 +10,7 @@ use crate::device::Device;
 const SETTINGS_FILE: &str = "/data/wallview/brightness";
 const TICK: Duration = Duration::from_millis(50);
 const SAMPLE_TICKS: u32 = 10;
+const IDLE: Duration = Duration::from_millis(500);
 const SMOOTHING: f64 = 0.12;
 const HYSTERESIS: f64 = 0.03;
 const RAMP_STEP: f64 = 0.02;
@@ -59,19 +60,51 @@ pub fn perceived_level(lux: f64) -> f64 {
     ((lux.ln() - DARK_LUX.ln()) / (BRIGHT_LUX.ln() - DARK_LUX.ln())).clamp(0.0, 1.0)
 }
 
-pub fn perceived_brightness(level: f64, settings: &Settings) -> f64 {
-    let low = (settings.minimum.min(settings.maximum) as f64 / 100.0).sqrt();
-    let high = (settings.maximum.max(settings.minimum) as f64 / 100.0).sqrt();
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Curve {
+    Linear,
+    Perceptual,
+}
+
+impl Curve {
+    pub fn from_scale(scale: Option<&str>) -> Curve {
+        if scale == Some("non-linear") {
+            Curve::Perceptual
+        } else {
+            Curve::Linear
+        }
+    }
+
+    fn perceived(self, fraction: f64) -> f64 {
+        let fraction = fraction.clamp(0.0, 1.0);
+        match self {
+            Curve::Linear => fraction.sqrt(),
+            Curve::Perceptual => fraction,
+        }
+    }
+
+    fn fraction(self, perceived: f64) -> f64 {
+        let perceived = perceived.clamp(0.0, 1.0);
+        match self {
+            Curve::Linear => perceived * perceived,
+            Curve::Perceptual => perceived,
+        }
+    }
+}
+
+pub fn perceived_brightness(level: f64, settings: &Settings, curve: Curve) -> f64 {
+    let low = curve.perceived(settings.minimum.min(settings.maximum) as f64 / 100.0);
+    let high = curve.perceived(settings.maximum.max(settings.minimum) as f64 / 100.0);
     low + (high - low) * level.clamp(0.0, 1.0)
 }
 
-pub fn duty(perceived: f64, max_brightness: u32) -> u32 {
-    let perceived = perceived.clamp(0.0, 1.0);
-    ((perceived * perceived * max_brightness as f64).round() as u32).clamp(1, max_brightness.max(1))
+pub fn duty(perceived: f64, max_brightness: u32, curve: Curve) -> u32 {
+    let max_brightness = max_brightness.max(1);
+    ((curve.fraction(perceived) * max_brightness as f64).round() as u32).clamp(1, max_brightness)
 }
 
-pub fn perceived_of_duty(duty: u32, max_brightness: u32) -> f64 {
-    (duty as f64 / max_brightness.max(1) as f64).clamp(0.0, 1.0).sqrt()
+pub fn perceived_of_duty(duty: u32, max_brightness: u32, curve: Curve) -> f64 {
+    curve.perceived(duty as f64 / max_brightness.max(1) as f64)
 }
 
 pub fn step_toward(current: f64, target: f64) -> f64 {
@@ -84,9 +117,25 @@ pub fn step_toward(current: f64, target: f64) -> f64 {
     }
 }
 
+pub fn next_duty(present: u32, goal: f64, max_brightness: u32, curve: Curve) -> u32 {
+    let wanted = duty(goal, max_brightness, curve);
+    if wanted == present {
+        return present;
+    }
+    let stepped = duty(step_toward(perceived_of_duty(present, max_brightness, curve), goal), max_brightness, curve);
+    if stepped != present {
+        stepped
+    } else if wanted > present {
+        present + 1
+    } else {
+        present - 1
+    }
+}
+
 #[derive(Default)]
 struct Shared {
     settings: Mutex<Settings>,
+    store: Mutex<()>,
     changes: AtomicU64,
 }
 
@@ -98,11 +147,11 @@ pub struct Brightness {
 impl Brightness {
     pub fn load() -> Self {
         let settings = fs::read_to_string(SETTINGS_FILE).map(|text| Settings::parse(&text)).unwrap_or_default();
-        Brightness { shared: Arc::new(Shared { settings: Mutex::new(settings), changes: AtomicU64::new(0) }) }
+        Brightness { shared: Arc::new(Shared { settings: Mutex::new(settings), ..Default::default() }) }
     }
 
     pub fn settings(&self) -> Settings {
-        *self.shared.settings.lock().unwrap()
+        *self.lock()
     }
 
     pub fn changes(&self) -> u64 {
@@ -114,20 +163,25 @@ impl Brightness {
     }
 
     fn lock(&self) -> MutexGuard<'_, Settings> {
-        self.shared.settings.lock().unwrap()
+        self.shared.settings.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn persist(&self) {
+        let _store = self.shared.store.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Err(error) = store(&self.settings()) {
+            eprintln!("wallview-agent: brightness: cannot store settings: {error}");
+        }
     }
 
     fn update(&self, change: impl FnOnce(&mut Settings)) {
         let mut settings = self.lock();
-        let mut updated = *settings;
-        change(&mut updated);
-        if updated != *settings {
-            match store(&updated) {
-                Ok(()) => *settings = updated,
-                Err(error) => eprintln!("wallview-agent: brightness: cannot store settings: {error}"),
-            }
-        }
+        let before = *settings;
+        change(&mut settings);
+        let changed = *settings != before;
         drop(settings);
+        if changed {
+            self.persist();
+        }
         self.changed();
     }
 
@@ -136,24 +190,28 @@ impl Brightness {
     }
 
     pub fn set_minimum(&self, minimum: u32) {
-        self.update(|settings| settings.minimum = minimum.clamp(1, 100));
+        self.update(|settings| {
+            settings.minimum = minimum.clamp(1, 100);
+            settings.maximum = settings.maximum.max(settings.minimum);
+        });
     }
 
     pub fn set_maximum(&self, maximum: u32) {
-        self.update(|settings| settings.maximum = maximum.clamp(1, 100));
+        self.update(|settings| {
+            settings.maximum = maximum.clamp(1, 100);
+            settings.minimum = settings.minimum.min(settings.maximum);
+        });
     }
 
     pub fn set_manual(&self, write: impl FnOnce()) {
         let mut settings = self.lock();
-        if settings.auto {
-            let manual = Settings { auto: false, ..*settings };
-            match store(&manual) {
-                Ok(()) => *settings = manual,
-                Err(error) => eprintln!("wallview-agent: brightness: cannot store settings: {error}"),
-            }
-        }
+        let was_auto = settings.auto;
+        settings.auto = false;
         write();
         drop(settings);
+        if was_auto {
+            self.persist();
+        }
         self.changed();
     }
 }
@@ -168,8 +226,10 @@ fn store(settings: &Settings) -> std::io::Result<()> {
 
 pub fn run(device: Device) {
     let brightness = device.brightness_control.clone();
+    let curve = device.backlight_curve();
     let mut smoothed: Option<f64> = None;
     let mut target: Option<f64> = None;
+    let mut applied: Option<Settings> = None;
     let mut ticks = 0;
     let mut ramping = false;
     loop {
@@ -177,16 +237,21 @@ pub fn run(device: Device) {
         if !settings.auto {
             smoothed = None;
             target = None;
+            applied = None;
             ramping = false;
-            thread::sleep(TICK * SAMPLE_TICKS);
+            thread::sleep(IDLE);
             continue;
         }
-        if ticks == 0 || smoothed.is_none() {
+        if applied != Some(settings) {
+            applied = Some(settings);
+            target = None;
+        }
+        if ticks == 0 || target.is_none() {
             if let Some(lux) = device.illuminance() {
                 let level = perceived_level(lux);
                 let next = smoothed.map_or(level, |previous| previous + SMOOTHING * (level - previous));
                 smoothed = Some(next);
-                let wanted = perceived_brightness(next, &settings);
+                let wanted = perceived_brightness(next, &settings, curve);
                 if target.is_none_or(|current| (wanted - current).abs() > HYSTERESIS) {
                     target = Some(wanted);
                 }
@@ -194,21 +259,17 @@ pub fn run(device: Device) {
         }
         ticks = (ticks + 1) % SAMPLE_TICKS;
         let Some(goal) = target else {
-            thread::sleep(TICK);
+            thread::sleep(IDLE);
             continue;
         };
         let guard = brightness.lock();
         if !guard.auto {
             continue;
         }
-        let max = device.max_brightness();
-        let current = perceived_of_duty(device.brightness(), max);
-        let wanted = duty(goal, max);
-        let moving = device.brightness() != wanted;
+        let present = device.brightness();
+        let next = next_duty(present, goal, device.max_brightness(), curve);
+        let moving = next != present;
         if moving {
-            let present = device.brightness();
-            let next = duty(step_toward(current, goal), max);
-            let next = if next != present { next } else if wanted > present { present + 1 } else { present - 1 };
             device.write_brightness(next);
         }
         drop(guard);
@@ -216,9 +277,11 @@ pub fn run(device: Device) {
             brightness.changed();
         }
         ramping = moving;
-        thread::sleep(if moving { TICK } else { TICK * SAMPLE_TICKS });
-        if !moving {
+        if moving {
+            thread::sleep(TICK);
+        } else {
             ticks = 0;
+            thread::sleep(IDLE);
         }
     }
 }
@@ -238,19 +301,29 @@ mod tests {
     }
 
     #[test]
-    fn keeps_auto_brightness_between_minimum_and_maximum() {
+    fn keeps_auto_brightness_between_minimum_and_maximum_on_a_linear_backlight() {
         let settings = Settings { auto: true, minimum: 4, maximum: 64 };
-        assert_eq!(duty(perceived_brightness(0.0, &settings), 255), 10);
-        assert_eq!(duty(perceived_brightness(1.0, &settings), 255), 163);
-        let swapped = Settings { auto: true, minimum: 64, maximum: 4 };
-        assert_eq!(perceived_brightness(0.0, &swapped), perceived_brightness(0.0, &settings));
+        assert_eq!(duty(perceived_brightness(0.0, &settings, Curve::Linear), 255, Curve::Linear), 10);
+        assert_eq!(duty(perceived_brightness(1.0, &settings, Curve::Linear), 255, Curve::Linear), 163);
+        assert_eq!(duty(perceived_brightness(0.5, &settings, Curve::Linear), 255, Curve::Linear), 64);
+    }
+
+    #[test]
+    fn does_not_correct_a_backlight_that_is_already_perceptual() {
+        let settings = Settings { auto: true, minimum: 10, maximum: 90 };
+        assert_eq!(Curve::from_scale(Some("non-linear")), Curve::Perceptual);
+        assert_eq!(Curve::from_scale(Some("linear")), Curve::Linear);
+        assert_eq!(Curve::from_scale(None), Curve::Linear);
+        assert_eq!(duty(perceived_brightness(0.5, &settings, Curve::Perceptual), 1000, Curve::Perceptual), 500);
+        assert!((perceived_of_duty(250, 1000, Curve::Perceptual) - 0.25).abs() < 1e-9);
     }
 
     #[test]
     fn never_turns_the_backlight_fully_dark() {
-        assert_eq!(duty(0.0, 255), 1);
-        assert_eq!(duty(1.0, 255), 255);
-        assert!((perceived_of_duty(64, 256) - 0.5).abs() < 1e-9);
+        assert_eq!(duty(0.0, 255, Curve::Linear), 1);
+        assert_eq!(duty(1.0, 255, Curve::Linear), 255);
+        assert_eq!(duty(0.5, 0, Curve::Linear), 1);
+        assert!((perceived_of_duty(64, 256, Curve::Linear) - 0.5).abs() < 1e-9);
     }
 
     #[test]
@@ -258,6 +331,10 @@ mod tests {
         assert!((step_toward(0.2, 0.8) - 0.22).abs() < 1e-9);
         assert!((step_toward(0.8, 0.2) - 0.78).abs() < 1e-9);
         assert_eq!(step_toward(0.5, 0.51), 0.51);
+        assert_eq!(next_duty(100, 1.0, 255, Curve::Linear), 106);
+        assert_eq!(next_duty(255, 1.0, 255, Curve::Linear), 255);
+        assert_eq!(next_duty(1, 0.1, 255, Curve::Linear), 2);
+        assert_eq!(next_duty(2, 0.0, 255, Curve::Linear), 1);
     }
 
     #[test]
