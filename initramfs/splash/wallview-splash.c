@@ -497,6 +497,18 @@ static enum flip_result flip_back(struct display *display)
 	return errno == EBUSY ? RETRY : FAILED;
 }
 
+static void log_kernel(const char *text)
+{
+	int kmsg = open("kmsg", O_WRONLY | O_CLOEXEC);
+
+	if (kmsg < 0)
+		kmsg = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+	if (kmsg < 0)
+		return;
+	dprintf(kmsg, "%s: %s\n", text, strerror(errno));
+	close(kmsg);
+}
+
 static uint32_t current_fb(struct display *display)
 {
 	struct drm_mode_crtc crtc = { .crtc_id = display->crtc };
@@ -508,10 +520,10 @@ static uint32_t current_fb(struct display *display)
 
 static void hand_off(struct display *display)
 {
-	uint32_t shown = display->buffers[display->front].fb;
+	uint32_t shown = current_fb(display);
 
 	if (ioctl(display->fd, DRM_IOCTL_DROP_MASTER, 0))
-		fprintf(stderr, "wallview-splash: dropping DRM master failed: %s\n", strerror(errno));
+		log_kernel("wallview-splash: dropping DRM master failed");
 	while (!quit_requested && current_fb(display) == shown)
 		usleep(HANDOFF_POLL_MS * 1000);
 }
