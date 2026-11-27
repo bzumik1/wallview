@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <drm/drm.h>
 #include <linux/input.h>
 #include <linux/uinput.h>
 #include <math.h>
@@ -75,6 +76,8 @@ struct options {
     double coast_speed;
     double blend;
     int debug;
+    int vblank;
+    const char *drm_path;
 };
 
 static struct contact contacts[MAX_SLOTS];
@@ -83,6 +86,10 @@ static int output;
 static int timer;
 static int timer_armed;
 static int64_t period;
+static int drm = -1;
+static int drm_failed;
+static int64_t drm_retry_at;
+static int vblank_pending;
 static const struct options *opts;
 static struct input_event pending[256];
 static int pending_count;
@@ -143,19 +150,87 @@ emit_position(int slot, int x, int y)
 }
 
 static void
-arm_timer(int on)
+set_timer(int64_t interval)
 {
     struct itimerspec spec = { 0 };
 
-    if (on == timer_armed)
-        return;
-    if (on)
-        spec.it_interval.tv_nsec = spec.it_value.tv_nsec = period;
-    if (timerfd_settime(timer, 0, &spec, NULL) < 0) {
+    spec.it_interval.tv_sec = spec.it_value.tv_sec = interval / NSEC_PER_SEC;
+    spec.it_interval.tv_nsec = spec.it_value.tv_nsec = interval % NSEC_PER_SEC;
+    if (timerfd_settime(timer, 0, &spec, NULL) < 0)
         perror("wallview-touch: timerfd_settime");
+}
+
+static void
+open_drm(void)
+{
+    if (drm >= 0 || drm_failed || !opts || !opts->vblank || now_ns() < drm_retry_at)
+        return;
+    int fd = open(opts->drm_path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
+
+    if (fd < 0) {
+        fprintf(stderr, "wallview-touch: %s: %s, using the timer\n", opts->drm_path, strerror(errno));
+        drm_failed = 1;
         return;
     }
-    timer_armed = on;
+    if (ioctl(fd, DRM_IOCTL_DROP_MASTER, 0) == 0) {
+        close(fd);
+        drm_retry_at = now_ns() + NSEC_PER_SEC;
+        return;
+    }
+    drm = fd;
+}
+
+static int
+request_vblank(void)
+{
+    if (vblank_pending)
+        return 0;
+    open_drm();
+    if (drm < 0)
+        return -1;
+
+    union drm_wait_vblank wait = { .request = { .type = _DRM_VBLANK_RELATIVE | _DRM_VBLANK_EVENT, .sequence = 1 } };
+
+    if (ioctl(drm, DRM_IOCTL_WAIT_VBLANK, &wait) < 0)
+        return -1;
+    vblank_pending = 1;
+    return 0;
+}
+
+static void
+arm_timer(int on)
+{
+    int mode = !on ? 0 : request_vblank() == 0 ? 2 : 1;
+
+    if (mode == timer_armed)
+        return;
+    set_timer(mode == 2 ? 3 * period : mode == 1 ? period : 0);
+    timer_armed = mode;
+}
+
+static int
+read_vblank(void)
+{
+    char buffer[1024];
+    ssize_t size;
+    int seen = 0;
+
+    while ((size = read(drm, buffer, sizeof(buffer))) > 0)
+        for (ssize_t at = 0; at + (ssize_t)sizeof(struct drm_event) <= size;) {
+            struct drm_event *event = (struct drm_event *)(buffer + at);
+
+            if (event->length < sizeof(*event))
+                break;
+            if (event->type == DRM_EVENT_VBLANK)
+                seen = 1;
+            at += event->length;
+        }
+    if (seen) {
+        vblank_pending = 0;
+        if (timer_armed == 2)
+            set_timer(3 * period);
+    }
+    return seen;
 }
 
 static void
@@ -724,6 +799,8 @@ load_options(struct options *options)
         .coast_speed = env_number("WALLVIEW_TOUCH_COAST_PX_PER_S", 150),
         .blend = env_number("WALLVIEW_TOUCH_BLEND", 0.7),
         .debug = (int)env_number("WALLVIEW_TOUCH_DEBUG", 0),
+        .vblank = (int)env_number("WALLVIEW_TOUCH_VBLANK", 0),
+        .drm_path = getenv("WALLVIEW_TOUCH_DRM") && *getenv("WALLVIEW_TOUCH_DRM") ? getenv("WALLVIEW_TOUCH_DRM") : "/dev/dri/card0",
     };
     if (options->blend > 0.95)
         options->blend = 0.7;
@@ -795,10 +872,11 @@ main(int argc, char **argv)
         current_slot.value < MAX_SLOTS)
         slot = current_slot.value;
 
-    struct pollfd fds[2] = { { input, POLLIN, 0 }, { timer, POLLIN, 0 } };
+    struct pollfd fds[3] = { { input, POLLIN, 0 }, { timer, POLLIN, 0 }, { -1, POLLIN, 0 } };
 
     for (;;) {
-        if (poll(fds, 2, -1) < 0) {
+        fds[2].fd = drm;
+        if (poll(fds, 3, -1) < 0) {
             if (errno == EINTR)
                 continue;
             return 1;
@@ -816,8 +894,12 @@ main(int argc, char **argv)
         if (fds[1].revents & POLLIN) {
             uint64_t expirations;
 
-            if (read(timer, &expirations, sizeof(expirations)) > 0)
+            if (read(timer, &expirations, sizeof(expirations)) > 0) {
+                vblank_pending = 0;
                 resample(&options, now_ns());
+            }
         }
+        if (drm >= 0 && (fds[2].revents & POLLIN) && read_vblank())
+            resample(&options, now_ns());
     }
 }
