@@ -33,7 +33,9 @@ refuse() {
 [ -s "$RUN/image.bin" ] || refuse "no image"
 probe=$("$RUN/cstfw" 2>&1)
 [ $? = 2 ] && case "$probe" in usage:*) true ;; *) false ;; esac || refuse "cstfw does not run here"
-awk '$2 == "/data" && $4 ~ /^rw/ { found = 1 } END { exit !found }' /proc/mounts || refuse "/data is not mounted read-write"
+if [ "$ARG" != recover ] || [ ! -e "$MARK" ]; then
+	awk '$2 == "/data" && $4 ~ /^rw/ { found = 1 } END { exit !found }' /proc/mounts || refuse "/data is not mounted read-write"
+fi
 [ -e "$MARK" ] && [ "$ARG" != recover ] && refuse "a flash failed earlier ($(cat "$MARK")): only recover"
 
 bound=0
@@ -44,12 +46,12 @@ old_mark=$(cat "$MARK" 2>/dev/null)
 
 line="running since $(date) ($ARG)"
 mkdir -p "$(dirname "$MARK")" && printf '%s\n' "$line" > "$MARK" && sync && [ "$(cat "$MARK" 2>/dev/null)" = "$line" ] || {
-	if [ "$had_mark" = 1 ]; then
-		printf '%s\n' "$old_mark" > "$MARK" 2>/dev/null
-		finish 2
+	if [ "$had_mark" = 1 ] && [ -e "$MARK" ]; then
+		echo "runner: marker not rewritten; the earlier one stands" >> "$RUN/log"
+	else
+		rm -f "$MARK"
+		refuse "cannot write $MARK"
 	fi
-	rm -f "$MARK"
-	refuse "cannot write $MARK"
 }
 echo "runner: marker written, driver bound=$bound, earlier failure=$had_mark" >> "$RUN/log"
 
