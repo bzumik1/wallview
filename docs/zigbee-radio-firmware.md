@@ -13,7 +13,13 @@ The 8.0.2 image expects RTS/CTS. The agent reads `/data/wallview/radio-flow-cont
 
 ## Procedure
 
-Run under the panel lock with the owner's explicit approval, after an independent review.
+Run under the panel lock, on stable power, from a wired host, with the owner's explicit approval of the one-way risk, after an independent review.
+
+Read-only checks first:
+- `/sys/kernel/debug/pinctrl/*/pinmux-pins`: the UART5 TX, RX, CTS and RTS pins belong to the serial device.
+- The image suits this board: panel 1 runs it on the same board revision, and `zgateway` has no other image or hardware check.
+- The image decompressed offline: plausible stack pointer and reset vector, end below NVM3, fits the flash.
+- bellows speaks the image's EZSP version.
 
 1. Radio mode Zigbee coordinator, no host connected (ZHA and Zigbee2MQTT not using port 6638), `/data/wallview/radio-flow-control` absent.
 2. Record the EZSP and stack version (`universal-silabs-flasher --device socket://<panel>:6638 probe`); the bootloader version comes from the entry test.
@@ -24,7 +30,8 @@ Run under the panel lock with the owner's explicit approval, after an independen
 
 ## Way back
 
-- **Upload rejected or interrupted:** the application area may be erased. The Gecko bootloader then stays in its menu after every reset or power-on, because it finds no valid application, so step 4 can be repeated over the bridge.
-- **New application runs but does not answer:** first remove `/data/wallview/radio-flow-control` and retry, then retry with it set. If EZSP still does not answer, the bootloader cannot be entered from software and the radio needs a confirmed reset/bootloader GPIO or SWD (panel opened). This is the residual risk of the upgrade.
-- **Back to 6.10.1:** the factory application cannot be read out without SWD, so there is no exact way back. An older ITEAD or Silicon Labs NCP image can be flashed with the same procedure.
-- Network state lives in the radio's NVM3 tokens and survives an application upgrade, but ZHA should be backed up first if a network exists.
+- **Image rejected:** LZ4 decompression is a compile-time option of the Gecko bootloader and the version does not reveal it. A bootloader without it rejects the `PROG_LZ4` tag in the first XMODEM block, before anything is erased; `run` then returns to 6.10.1. The fallback is the same image repacked offline as an uncompressed `PROG` GBL (unsigned, so only the CRC changes), prepared before the flash.
+- **Upload interrupted:** the application area may be partly written. The Gecko bootloader then stays in its menu after every reset or power-on, because it finds no valid application, so step 4 can be repeated over the bridge.
+- **New application runs but does not answer:** while the file says `hardware`, writes block when CTS is not asserted, so first remove `/data/wallview/radio-flow-control` and retry, then retry with it set. If EZSP still does not answer, the bootloader cannot be entered from software and the radio needs a confirmed reset/bootloader GPIO or SWD (panel opened). This is the residual risk of the upgrade, and its worst case needs the panel opened.
+- **No way back to 6.10.1:** the factory application cannot be read out without SWD, and EmberZNet does not support downgrades of its NVM3 data. The upgrade is one-way. Only ITEAD images built for this board are safe: a generic Silicon Labs image uses other UART pins and would lock the radio out until SWD.
+- Network state lives in the radio's NVM3 tokens and migrates forward. Back up first in every case: `bellows backup`, manufacturing tokens and the `probe` output.
