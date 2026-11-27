@@ -241,7 +241,7 @@ The panel's CPU is roughly at Raspberry Pi 3 level, but with 2 GB RAM and a GLES
 | Services | single program `wallview-agent` in Rust | single-digit MB RAM, start in ms |
 | Memory | zram, no swap | fast, spares eMMC |
 
-Python only for the voice assistant, and only if the user enables it. There will be no systemd, X11, desktop, Chromium, or Zigbee/ser2net. Target: logo instantly, dashboard within 10 s (to be measured).
+Python only for the voice assistant, and only if the user enables it. There will be no systemd, X11, desktop, Chromium, or ser2net (the agent shares the Zigbee radio itself). Target: logo instantly, dashboard within 10 s (to be measured).
 
 ### Why WPE WebKit and not Chromium
 
@@ -448,27 +448,39 @@ Goal: the panel in the wall updates itself for years, safely and without removal
 - Mains power supply with electrolytic capacitors (typically 10–15 years)
 - The panel supports 2.4 GHz Wi-Fi only
 
-## Phase 7 – Thread border router
+## Phase 7 – Zigbee and Thread
 
-Decision: MG21 runs only as a Thread RCP, the panel becomes a Thread border router. Zigbee stays a possible community extension (same flashing tools). ser2net is dropped.
+Decision (2026-11-27, replaces "Thread RCP only"): the MG21 runs one protocol at a time, chosen per panel with the **Radio mode** select on the panel's ESPHome device: Off, Zigbee coordinator, Zigbee router, Thread border router. The agent reflashes the radio when the mode needs other firmware. Zigbee coordinator comes first because the factory EZSP firmware already works and needs no flashing.
 
-**Why:** the panel is mains powered and always on; a panel in every room = a border router in every room. More border routers increase reliability, HA shares the Thread network credentials between them.
+**Why:** both protocols matter in a real home, and one radio cannot run both reliably. A panel in every room can be a Zigbee router or a Thread border router where each is needed; the Zigbee stack stays in Home Assistant (ZHA or Zigbee2MQTT), the Thread network is shared by HA between border routers.
 
 ### Tasks
 
-- [ ] Find the GPIOs for MG21 reset and bootloader (the original app updates its firmware, so a path exists)
-- [ ] Build OpenThread RCP firmware for MG21 with the board's UART pins (same chip as HA Connect ZBT-1, the community builds for various MG21 devices)
-- [ ] Flash from the panel via `universal-silabs-flasher`
-- [ ] `otbr-agent` on the panel, UART with hardware flow control
-- [ ] Connect to the HA OpenThread Border Router integration, ideally offered automatically
+- [x] Find the UART of the MG21: UART5, EZSP NCP at 115200, software flow control
+- [x] Zigbee coordinator: TCP bridge in `wallview-agent` (port 6638), mDNS `_zigbee-coordinator._tcp` for ZHA discovery, Radio mode select
+- [ ] Test the bridge with ZHA and Zigbee2MQTT on the panel; read the EZSP version and the chip marking (MG21A020F512/F768/F1024 decides the firmware build)
+- [ ] Prove the Gecko bootloader without writing anything: EZSP `launchStandaloneBootloader`, bootloader menu on ttyS5, `2` (run) returns to EZSP
+- [ ] Check whether a reboot or a power cycle of the panel resets the MG21
+- [ ] Find the GPIOs for MG21 reset and bootloader entry (the iHost uses the same two-GPIO pattern), prove that bootloader entry by GPIO works, or prove SWD on the module header; check whether RTS/CTS (GPIO3_A3/A5) reach the module
+- [ ] Look in the own Android eMMC backup for ITEAD's MG21 `.gbl` and the GPIO handling of the vendor app (never committed)
+- [ ] SM-044 board manifest (darkxst's fork of the firmware builder has the MG21/Sonoff manifests): open-source EZSP NCP first (the way back to coordinator), then Zigbee router and OpenThread RCP, all forcing no hardware flow control unless RTS/CTS are wired; built in CI, no vendor firmware in the repository
+- [ ] Flashing from the agent in Rust: check the GBL's CRC and tags, never send bootloader GBLs, require a ZHA network backup and no connected host, enter the Gecko bootloader (EZSP, Spinel or router CLI), XMODEM upload; at start, run the app if the radio sits in the bootloader. Switching becomes select + an explicit Apply (or an `update` entity), never a single tap
+- [ ] `otbr-agent` on the panel for Thread mode (own Buildroot package, `OTBR_MDNS=openthread`, REST on 8081 firewalled to Home Assistant, test mDNS next to the agent's responder); HA's OTBR integration has no discovery, so the WallView integration sets the URL
+- [ ] Kernel and system for Thread: TUN, IPv6 forwarding, `accept_ra=2`, route information options, nftables
 - [ ] IPv6 in the system (link-local addresses are enough)
+- [ ] ESPHome serial proxy in the agent (HA core and bellows already support it: Noise-encrypted, follows address changes, ASH acks on the panel); keep the TCP bridge for Zigbee2MQTT
 
 ### Caution
 
 - Do not use multiprotocol (Zigbee + Thread on one chip), Nabu Casa abandoned it in 2024
-- Interference with the panel's Wi-Fi (both 2.4 GHz on one board): Thread channel as far from the Wi-Fi channel as possible (e.g. Wi-Fi 1, Thread 25); warn in the settings
+- Interference with the panel's Wi-Fi (both 2.4 GHz on one board): Zigbee/Thread channel as far from the Wi-Fi channel as possible (e.g. Wi-Fi 1, channel 25); warn in the settings
+- EZSP over Wi-Fi needs a stable link: the NCP resets when ASH acknowledgements arrive late
+- A reset line alone does not make a bad flash recoverable: the Gecko bootloader only checks the app's vector table, so a half-written image or one with wrong UART pins boots and never answers. Do not flash anything before bootloader entry by GPIO or SWD is proven
+- The factory firmware cannot be read back without SWD (and maybe not at all if debug lock is set); the way back is an open-source EZSP NCP built for the SM-044 pins
+- Reflashing can lose the Zigbee network on the chip: a ZHA backup before every reflash is required
+- RCP at 460800 without flow control may overrun the PX30 UART FIFO under kiosk load: start at 115200/230400 and watch `oe:` in `/proc/tty/driver/serial`
 
-Estimate: a few weeks, mainly verifying pins and building firmware.
+Estimate: Zigbee coordinator days, router and Thread a few weeks (pins, firmware builds, flasher).
 
 ## Phase 8 – Voice assistant
 
@@ -617,7 +629,6 @@ The mainline kernel from phase 1 is the basis for all of these; none of it is in
 ### Other
 
 - Bluetooth proxy for HA (requires the ESPHome API for BLE on Linux)
-- Zigbee router firmware for MG21 as an alternative to Thread (community)
 - Native LVGL UI as a fallback if the HA frontend outgrows the A35
 - Matter: do not expose panel entities from the panel (CSA certification, SDK size); HA exposes them to Apple/Google (HomeKit Bridge, Google Assistant, Home Assistant Matter Hub)
 - Support for Smatek T6E clones (Zemismart, Avatto, Tuya)
@@ -656,7 +667,7 @@ The functional kiosk stands after phase 2, everything else builds on it. Solid l
 | 4 · User experience | Wi-Fi setup, Improv, offline clock, screensaver, design | |
 | 5 · Camera and intercom (extension) | substream, MJPEG, popup on ring | |
 | 6 · OTA and operation | RAUC A/B, signed images, watchdog, security → **M6 a few weeks in the wall** | |
-| 7 · Thread border router (extension) | MG21 as OpenThread RCP, otbr-agent | a few weeks |
+| 7 · Zigbee and Thread | MG21 as Zigbee coordinator (bridge), router or OpenThread RCP + otbr-agent, switched from HA | days to a few weeks |
 | 8 · Voice assistant (extension) | linux-voice-assistant, PipeWire, display feedback | |
 | 9 · Installer | HA add-on, WebUSB, mandatory backup, restore → **M7 public release** | weeks |
 

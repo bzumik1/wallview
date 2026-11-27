@@ -4,6 +4,8 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::radio::Radio;
+
 const BACKLIGHT: &str = "/sys/class/backlight/backlight";
 const URL_FILE: &str = "/data/wallview/url";
 const SIGN_IN_FILE: &str = "/data/wallview/sign-in";
@@ -21,6 +23,7 @@ pub struct Device {
     pub mac: String,
     light_sensor: Option<PathBuf>,
     sign_in_requests: Arc<AtomicU64>,
+    pub radio: Radio,
 }
 
 fn read(path: impl AsRef<Path>) -> Option<String> {
@@ -50,6 +53,7 @@ impl Device {
             mac,
             light_sensor,
             sign_in_requests: Arc::new(AtomicU64::new(0)),
+            radio: Radio::load(),
         }
     }
 

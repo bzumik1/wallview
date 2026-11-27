@@ -3,12 +3,13 @@ use prost::Message;
 use crate::api::{
     BinarySensorStateResponse, ButtonCommandRequest, ColorMode, EntityCategory, ExecuteServiceRequest,
     LightCommandRequest, LightStateResponse, ListEntitiesBinarySensorResponse, ListEntitiesButtonResponse,
-    ListEntitiesLightResponse, ListEntitiesSensorResponse, ListEntitiesServicesArgument,
+    ListEntitiesLightResponse, ListEntitiesSelectResponse, ListEntitiesSensorResponse, ListEntitiesServicesArgument,
     ListEntitiesServicesResponse, ListEntitiesTextResponse, ListEntitiesTextSensorResponse, SensorStateClass,
-    SensorStateResponse, ServiceArgType, TextCommandRequest, TextMode, TextSensorStateResponse,
+    SelectCommandRequest, SelectStateResponse, SensorStateResponse, ServiceArgType, TextCommandRequest, TextMode, TextSensorStateResponse,
     TextStateResponse,
 };
 use crate::device::Device;
+use crate::radio::Mode;
 
 use super::message_type;
 
@@ -27,6 +28,8 @@ pub const IP_ADDRESS: u32 = 12;
 pub const VERSION: u32 = 13;
 pub const SIGN_IN_AGAIN: u32 = 14;
 pub const PAIR: u32 = 15;
+pub const RADIO_MODE: u32 = 16;
+pub const ZIGBEE_CLIENT: u32 = 17;
 
 pub type Encoded = (u16, Vec<u8>);
 
@@ -81,6 +84,30 @@ pub fn list() -> Vec<Encoded> {
             key: PRESENCE,
             name: "Presence".into(),
             device_class: "occupancy".into(),
+            ..Default::default()
+        },
+    ));
+    messages.push(encode(
+        message_type::LIST_ENTITIES_BINARY_SENSOR,
+        ListEntitiesBinarySensorResponse {
+            object_id: "radio_client_connected".into(),
+            key: ZIGBEE_CLIENT,
+            name: "Radio client connected".into(),
+            device_class: "connectivity".into(),
+            icon: "mdi:lan-connect".into(),
+            entity_category: EntityCategory::Diagnostic as i32,
+            ..Default::default()
+        },
+    ));
+    messages.push(encode(
+        message_type::LIST_ENTITIES_SELECT,
+        ListEntitiesSelectResponse {
+            object_id: "radio_mode".into(),
+            key: RADIO_MODE,
+            name: "Radio mode".into(),
+            icon: "mdi:radio-tower".into(),
+            options: Mode::ALL.iter().map(|mode| mode.label().to_string()).collect(),
+            entity_category: EntityCategory::Config as i32,
             ..Default::default()
         },
     ));
@@ -235,8 +262,27 @@ pub fn text_sensor_states(device: &Device) -> Vec<Encoded> {
         .collect()
 }
 
+pub fn radio_states(device: &Device) -> Vec<Encoded> {
+    vec![
+        encode(
+            message_type::SELECT_STATE,
+            SelectStateResponse { key: RADIO_MODE, state: device.radio.mode().label().into(), missing_state: false, ..Default::default() },
+        ),
+        encode(
+            message_type::BINARY_SENSOR_STATE,
+            BinarySensorStateResponse {
+                key: ZIGBEE_CLIENT,
+                state: device.radio.client_connected(),
+                missing_state: false,
+                ..Default::default()
+            },
+        ),
+    ]
+}
+
 pub fn all_states(device: &Device) -> Vec<Encoded> {
     let mut states = vec![display_state(device), url_state(device)];
+    states.extend(radio_states(device));
     if let Some((_, presence)) = presence_state(device) {
         states.push(presence);
     }
@@ -269,6 +315,17 @@ pub fn handle_button(device: &Device, data: &[u8]) {
         RESTART_KIOSK => device.restart_kiosk(),
         SIGN_IN_AGAIN => device.request_sign_in(),
         _ => {}
+    }
+}
+
+pub fn handle_select(device: &Device, data: &[u8]) {
+    let Ok(command) = SelectCommandRequest::decode(data) else {
+        return;
+    };
+    if command.key == RADIO_MODE {
+        if let Some(mode) = Mode::from_label(&command.state) {
+            device.radio.set_mode(mode);
+        }
     }
 }
 

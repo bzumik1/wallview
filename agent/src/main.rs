@@ -4,8 +4,10 @@ mod device;
 mod discovery;
 mod esphome;
 mod improv;
+mod mdns;
 mod mqtt;
 mod mqtt_discovery;
+mod radio;
 mod wifi;
 
 use std::path::Path;
@@ -47,5 +49,8 @@ fn main() {
     start_improv_when_needed(device.clone());
     let discovery_device = device.clone();
     thread::spawn(move || discovery::run(discovery_device));
+    let radio = device.radio.clone();
+    let (node_name, friendly_name, serial_number) = (device.node_name(), device.name.clone(), device.id.clone());
+    thread::spawn(move || radio::run(radio, node_name, friendly_name, serial_number));
     esphome::serve(device, esphome::KeyStore::load(API_KEY));
 }

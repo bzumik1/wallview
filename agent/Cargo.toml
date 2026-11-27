@@ -1,12 +1,13 @@
 [package]
 name = "wallview-agent"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 description = "Home Assistant integration of the WallView panel: ESPHome native API, optional MQTT"
 
 [dependencies]
 base64 = "0.22"
+libc = "0.2"
 bluer = { version = "0.17", features = ["bluetoothd"] }
 mdns-sd = "0.13"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
