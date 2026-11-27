@@ -3,9 +3,9 @@ use prost::Message;
 use crate::api::{
     BinarySensorStateResponse, ButtonCommandRequest, ColorMode, EntityCategory, ExecuteServiceRequest,
     LightCommandRequest, LightStateResponse, ListEntitiesBinarySensorResponse, ListEntitiesButtonResponse,
-    ListEntitiesLightResponse, ListEntitiesSelectResponse, ListEntitiesSensorResponse, ListEntitiesServicesArgument,
+    ListEntitiesLightResponse, ListEntitiesSelectResponse, ListEntitiesSensorResponse, ListEntitiesServicesArgument, ListEntitiesSwitchResponse,
     ListEntitiesServicesResponse, ListEntitiesTextResponse, ListEntitiesTextSensorResponse, SensorStateClass,
-    SelectCommandRequest, SelectStateResponse, SensorStateResponse, ServiceArgType, TextCommandRequest, TextMode, TextSensorStateResponse,
+    SelectCommandRequest, SelectStateResponse, SensorStateResponse, SwitchCommandRequest, SwitchStateResponse, ServiceArgType, TextCommandRequest, TextMode, TextSensorStateResponse,
     TextStateResponse,
 };
 use crate::device::Device;
@@ -30,6 +30,7 @@ pub const SIGN_IN_AGAIN: u32 = 14;
 pub const PAIR: u32 = 15;
 pub const RADIO_MODE: u32 = 16;
 pub const ZIGBEE_CLIENT: u32 = 17;
+pub const BLUETOOTH_PROXY: u32 = 18;
 
 pub type Encoded = (u16, Vec<u8>);
 
@@ -107,6 +108,17 @@ pub fn list() -> Vec<Encoded> {
             name: "Radio mode".into(),
             icon: "mdi:radio-tower".into(),
             options: Mode::ALL.iter().map(|mode| mode.label().to_string()).collect(),
+            entity_category: EntityCategory::Config as i32,
+            ..Default::default()
+        },
+    ));
+    messages.push(encode(
+        message_type::LIST_ENTITIES_SWITCH,
+        ListEntitiesSwitchResponse {
+            object_id: "bluetooth_proxy".into(),
+            key: BLUETOOTH_PROXY,
+            name: "Bluetooth proxy".into(),
+            icon: "mdi:bluetooth".into(),
             entity_category: EntityCategory::Config as i32,
             ..Default::default()
         },
@@ -280,8 +292,15 @@ pub fn radio_states(device: &Device) -> Vec<Encoded> {
     ]
 }
 
+pub fn bluetooth_proxy_state(device: &Device) -> Encoded {
+    encode(
+        message_type::SWITCH_STATE,
+        SwitchStateResponse { key: BLUETOOTH_PROXY, state: device.bluetooth.proxy_enabled(), ..Default::default() },
+    )
+}
+
 pub fn all_states(device: &Device) -> Vec<Encoded> {
-    let mut states = vec![display_state(device), url_state(device)];
+    let mut states = vec![display_state(device), url_state(device), bluetooth_proxy_state(device)];
     states.extend(radio_states(device));
     if let Some((_, presence)) = presence_state(device) {
         states.push(presence);
@@ -326,6 +345,15 @@ pub fn handle_select(device: &Device, data: &[u8]) {
         if let Some(mode) = Mode::from_label(&command.state) {
             device.radio.set_mode(mode);
         }
+    }
+}
+
+pub fn handle_switch(device: &Device, data: &[u8]) {
+    let Ok(command) = SwitchCommandRequest::decode(data) else {
+        return;
+    };
+    if command.key == BLUETOOTH_PROXY {
+        device.bluetooth.set_proxy(command.state);
     }
 }
 

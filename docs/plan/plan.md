@@ -628,7 +628,7 @@ The mainline kernel from phase 1 is the basis for all of these; none of it is in
 
 ### Other
 
-- Bluetooth proxy for HA (requires the ESPHome API for BLE on Linux)
+- Bluetooth proxy for HA: passive advertisements in progress (issue #5, `docs/home-assistant.md`), active connections next
 - Native LVGL UI as a fallback if the HA frontend outgrows the A35
 - Matter: do not expose panel entities from the panel (CSA certification, SDK size); HA exposes them to Apple/Google (HomeKit Bridge, Google Assistant, Home Assistant Matter Hub)
 - Support for Smatek T6E clones (Zemismart, Avatto, Tuya)

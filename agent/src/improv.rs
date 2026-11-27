@@ -32,6 +32,7 @@ const COMMAND_WIFI_SETTINGS: u8 = 0x01;
 const COMMAND_IDENTIFY: u8 = 0x02;
 const CAPABILITY_IDENTIFY: u8 = 0x01;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const RETRY: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 struct State {
@@ -256,6 +257,7 @@ async fn serve(device: Device) -> bluer::Result<()> {
 }
 
 pub fn run(device: Device) {
+    let _bluetooth = device.bluetooth.hold();
     let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -263,8 +265,15 @@ pub fn run(device: Device) {
             return;
         }
     };
-    if let Err(error) = runtime.block_on(serve(device)) {
-        eprintln!("wallview-agent: improv: {error}");
+    loop {
+        match runtime.block_on(serve(device.clone())) {
+            Ok(()) => return,
+            Err(error) => eprintln!("wallview-agent: improv: {error}, retrying"),
+        }
+        std::thread::sleep(RETRY);
+        if wifi::address().is_some() {
+            return;
+        }
     }
 }
 
