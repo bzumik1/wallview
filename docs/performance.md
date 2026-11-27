@@ -162,3 +162,29 @@ The controller produces new coordinates only every 25–60 ms and repeats the la
 | same, with kernel patch 0006 | 64 (raw 65) | 659 | 291 | 104 px | 7.3 px |
 
 Latency 24 smooths further (jerks about 380 in the offline prototype) at 8 ms more lag; that is a feel decision for a panel A/B. Offline comparisons on the same capture: a quadratic least-squares predictor (as in Chromium) and a constant-acceleration Kalman filter were both worse than linear interpolation on every metric, and a time-only debounce (as tslib's `debounce` module) bridged only 4 more lifts while delaying every tap by the debounce time, so neither replaces `wallview-touch`. After patch 0006 about 7 false lifts in 27 s of circling remain that look exactly like real lifts; holding them costs every real lift of a moving finger the hold time.
+
+### Comparison with Android touch resampling (2026-11-28)
+
+Read from AOSP `frameworks/native` (main): `libs/input/InputConsumer.cpp`, `libs/input/Resampler.cpp`, `services/inputflinger/reader/mapper/MultiTouchInputMapper.cpp`. Android resamples in the app's `InputConsumer`, enabled unless `ro.input.resampling` is 0. The exact Android version of the panel's original system and any vendor property overrides are not checked yet.
+
+| | Android | wallview-touch |
+|---|---|---|
+| Sample time | frame time − 5 ms (`RESAMPLE_LATENCY`) | tick − 16 ms (`LATENCY_MS`) |
+| Interpolation | between the two samples around the sample time, skipped if they are < 2 ms apart | same, between coordinate changes |
+| Extrapolation | last two samples, only if 2–20 ms apart, at most min(gap / 2, 8 ms) | least-squares velocity over up to 3 samples ≤ 150 ms apart, at most min(gap, 30 ms), faded out after 1.5 × gap |
+| Lifts | passed through at once; `MultiTouchInputMapper` releases a slot in the same sync, no debounce | lifts of a moving finger held up to 100 ms and rejoined near the predicted position |
+| After a gap | nothing | coasting with exponential stop, blend back onto the real path |
+| New sample behind the last resampled one | replaced by the resampled position (`rewriteMessage`) | blend offset decays per tick |
+
+The vendor Android touch driver reports a lift on the first frame without a pressed point (see `docs/touch-controller.md`), so Android passed every false lift of this controller to apps.
+
+Android's limits assume a controller reporting every 4–10 ms. This controller changes coordinates every 25–60 ms, so Android would almost never extrapolate (gap > 20 ms) and a 5 ms latency interpolates only a small part of each gap. Replay of `touch-raw-2026-11-27.txt` with Android-like settings (`LATENCY_MS=5 PREDICTION_MS=8 MAX_GAP_MS=20 LIFT_MS=0 COAST_MS=0`; an approximation, not a port):
+
+| | Android-like | defaults |
+|---|---|---|
+| Output touch-downs (raw 81) | 81 | 76 |
+| Stalls | 1793 | 259 |
+| Jerks | 1142 | 550 |
+| Max step | 146 px | 104 px |
+| Path error p50 / p95 | 8.0 / 36.8 px | 7.0 / 32.1 px |
+| Release after last sample p50 / max | 23 / 27 ms | 27 / 134 ms |
