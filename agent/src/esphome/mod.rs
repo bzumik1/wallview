@@ -56,6 +56,9 @@ pub mod message_type {
     pub const SWITCH_STATE: u16 = 26;
     pub const TEXT_SENSOR_STATE: u16 = 27;
     pub const LIST_ENTITIES_SERVICES: u16 = 41;
+    pub const LIST_ENTITIES_NUMBER: u16 = 49;
+    pub const NUMBER_STATE: u16 = 50;
+    pub const NUMBER_COMMAND_REQUEST: u16 = 51;
     pub const EXECUTE_SERVICE_REQUEST: u16 = 42;
     pub const LIGHT_COMMAND_REQUEST: u16 = 32;
     pub const SWITCH_COMMAND_REQUEST: u16 = 33;
@@ -176,6 +179,7 @@ fn handle_client(
     let mut last_presence = None;
     let mut radio_changes = device.radio.changes();
     let mut bluetooth_changes = device.bluetooth.changes();
+    let mut brightness_changes = device.brightness_control.changes();
     let proxy_at_connect = device.bluetooth.proxy_enabled();
     let mut last_sensors = Instant::now();
     let mut last_states = Instant::now();
@@ -213,6 +217,14 @@ fn handle_client(
         }
         if let Some(advertisements) = &subscriptions.advertisements {
             send_advertisements(&sender, advertisements)?;
+        }
+        if device.brightness_control.changes() != brightness_changes {
+            brightness_changes = device.brightness_control.changes();
+            if subscriptions.states {
+                for (message_type, data) in entities::brightness_states(device) {
+                    sender.send(message_type, &data)?;
+                }
+            }
         }
         if device.bluetooth.changes() != bluetooth_changes {
             bluetooth_changes = device.bluetooth.changes();
@@ -352,6 +364,7 @@ fn handle_message(
         }
         SELECT_COMMAND_REQUEST => entities::handle_select(device, data),
         SWITCH_COMMAND_REQUEST => entities::handle_switch(device, data),
+        NUMBER_COMMAND_REQUEST => entities::handle_number(device, data),
         SUBSCRIBE_BLUETOOTH_LE_ADVERTISEMENTS_REQUEST => {
             if device.bluetooth.proxy_enabled() && subscriptions.advertisements.is_none() {
                 subscriptions.advertisements = Some(device.bluetooth.subscribe());

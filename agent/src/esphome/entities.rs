@@ -3,8 +3,8 @@ use prost::Message;
 use crate::api::{
     BinarySensorStateResponse, ButtonCommandRequest, ColorMode, EntityCategory, ExecuteServiceRequest,
     LightCommandRequest, LightStateResponse, ListEntitiesBinarySensorResponse, ListEntitiesButtonResponse,
-    ListEntitiesLightResponse, ListEntitiesSelectResponse, ListEntitiesSensorResponse, ListEntitiesServicesArgument, ListEntitiesSwitchResponse,
-    ListEntitiesServicesResponse, ListEntitiesTextResponse, ListEntitiesTextSensorResponse, SensorStateClass,
+    ListEntitiesLightResponse, ListEntitiesNumberResponse, ListEntitiesSelectResponse, ListEntitiesSensorResponse, ListEntitiesServicesArgument, ListEntitiesSwitchResponse,
+    ListEntitiesServicesResponse, ListEntitiesTextResponse, ListEntitiesTextSensorResponse, NumberCommandRequest, NumberMode, NumberStateResponse, SensorStateClass,
     SelectCommandRequest, SelectStateResponse, SensorStateResponse, SwitchCommandRequest, SwitchStateResponse, ServiceArgType, TextCommandRequest, TextMode, TextSensorStateResponse,
     TextStateResponse,
 };
@@ -31,6 +31,12 @@ pub const PAIR: u32 = 15;
 pub const RADIO_MODE: u32 = 16;
 pub const ZIGBEE_CLIENT: u32 = 17;
 pub const BLUETOOTH_PROXY: u32 = 18;
+pub const AUTO_BRIGHTNESS: u32 = 19;
+pub const AUTO_BRIGHTNESS_MINIMUM: u32 = 20;
+pub const AUTO_BRIGHTNESS_MAXIMUM: u32 = 21;
+
+const NO_EFFECT: &str = "None";
+const AUTO_EFFECT: &str = "Auto";
 
 pub type Encoded = (u16, Vec<u8>);
 
@@ -74,6 +80,7 @@ pub fn list() -> Vec<Encoded> {
             key: DISPLAY,
             name: "Display".into(),
             supported_color_modes: vec![ColorMode::Brightness as i32],
+            effects: vec![NO_EFFECT.into(), AUTO_EFFECT.into()],
             icon: "mdi:tablet-dashboard".into(),
             ..Default::default()
         },
@@ -123,6 +130,37 @@ pub fn list() -> Vec<Encoded> {
             ..Default::default()
         },
     ));
+    messages.push(encode(
+        message_type::LIST_ENTITIES_SWITCH,
+        ListEntitiesSwitchResponse {
+            object_id: "auto_brightness".into(),
+            key: AUTO_BRIGHTNESS,
+            name: "Auto brightness".into(),
+            icon: "mdi:brightness-auto".into(),
+            ..Default::default()
+        },
+    ));
+    for (key, object_id, name, icon) in [
+        (AUTO_BRIGHTNESS_MINIMUM, "auto_brightness_minimum", "Auto brightness minimum", "mdi:brightness-4"),
+        (AUTO_BRIGHTNESS_MAXIMUM, "auto_brightness_maximum", "Auto brightness maximum", "mdi:brightness-7"),
+    ] {
+        messages.push(encode(
+            message_type::LIST_ENTITIES_NUMBER,
+            ListEntitiesNumberResponse {
+                object_id: object_id.into(),
+                key,
+                name: name.into(),
+                icon: icon.into(),
+                min_value: 1.0,
+                max_value: 100.0,
+                step: 1.0,
+                unit_of_measurement: "%".into(),
+                mode: NumberMode::Slider as i32,
+                entity_category: EntityCategory::Config as i32,
+                ..Default::default()
+            },
+        ));
+    }
     for sensor in &SENSORS {
         messages.push(encode(
             message_type::LIST_ENTITIES_SENSOR,
@@ -209,6 +247,7 @@ pub fn display_state(device: &Device) -> Encoded {
             state: device.backlight_on(),
             brightness: device.brightness() as f32 / max,
             color_mode: ColorMode::Brightness as i32,
+            effect: if device.brightness_control.settings().auto { AUTO_EFFECT } else { NO_EFFECT }.into(),
             ..Default::default()
         },
     )
@@ -299,8 +338,24 @@ pub fn bluetooth_proxy_state(device: &Device) -> Encoded {
     )
 }
 
+pub fn brightness_states(device: &Device) -> Vec<Encoded> {
+    let settings = device.brightness_control.settings();
+    let mut states = vec![
+        display_state(device),
+        encode(message_type::SWITCH_STATE, SwitchStateResponse { key: AUTO_BRIGHTNESS, state: settings.auto, ..Default::default() }),
+    ];
+    for (key, value) in [(AUTO_BRIGHTNESS_MINIMUM, settings.minimum), (AUTO_BRIGHTNESS_MAXIMUM, settings.maximum)] {
+        states.push(encode(
+            message_type::NUMBER_STATE,
+            NumberStateResponse { key, state: value as f32, missing_state: false, ..Default::default() },
+        ));
+    }
+    states
+}
+
 pub fn all_states(device: &Device) -> Vec<Encoded> {
-    let mut states = vec![display_state(device), url_state(device), bluetooth_proxy_state(device)];
+    let mut states = brightness_states(device);
+    states.extend([url_state(device), bluetooth_proxy_state(device)]);
     states.extend(radio_states(device));
     if let Some((_, presence)) = presence_state(device) {
         states.push(presence);
@@ -315,7 +370,13 @@ pub fn handle_light(device: &Device, data: &[u8]) -> Option<Encoded> {
     if command.key != DISPLAY {
         return None;
     }
-    if command.has_brightness {
+    let auto = command.has_effect && command.effect == AUTO_EFFECT;
+    if auto {
+        device.brightness_control.set_auto(true);
+    } else if command.has_effect {
+        device.brightness_control.set_auto(false);
+    }
+    if command.has_brightness && !auto {
         let max = device.max_brightness() as f32;
         device.set_brightness((command.brightness.clamp(0.0, 1.0) * max).round() as u32);
     }
@@ -352,8 +413,25 @@ pub fn handle_switch(device: &Device, data: &[u8]) {
     let Ok(command) = SwitchCommandRequest::decode(data) else {
         return;
     };
-    if command.key == BLUETOOTH_PROXY {
-        device.bluetooth.set_proxy(command.state);
+    match command.key {
+        BLUETOOTH_PROXY => device.bluetooth.set_proxy(command.state),
+        AUTO_BRIGHTNESS => device.brightness_control.set_auto(command.state),
+        _ => {}
+    }
+}
+
+pub fn handle_number(device: &Device, data: &[u8]) {
+    let Ok(command) = NumberCommandRequest::decode(data) else {
+        return;
+    };
+    if !command.state.is_finite() {
+        return;
+    }
+    let value = command.state.round().clamp(1.0, 100.0) as u32;
+    match command.key {
+        AUTO_BRIGHTNESS_MINIMUM => device.brightness_control.set_minimum(value),
+        AUTO_BRIGHTNESS_MAXIMUM => device.brightness_control.set_maximum(value),
+        _ => {}
     }
 }
 

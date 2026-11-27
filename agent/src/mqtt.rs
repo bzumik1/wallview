@@ -1,6 +1,6 @@
 use std::process::Command;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rumqttc::{Client, Event, LastWill, MqttOptions, Packet, QoS};
 use serde_json::{json, Value};
@@ -10,6 +10,7 @@ use crate::device::Device;
 use crate::mqtt_discovery::{self, Topics};
 
 const SENSOR_INTERVAL: Duration = Duration::from_secs(15);
+const CHANGE_INTERVAL: Duration = Duration::from_secs(1);
 
 pub fn run(config: Config, device: Device) {
     let topics = Topics::new(&device.id);
@@ -26,9 +27,20 @@ pub fn run(config: Config, device: Device) {
     let publisher = client.clone();
     let sensor_device = device.clone();
     let sensor_topics = topics.clone();
-    thread::spawn(move || loop {
-        publish_sensors(&publisher, &sensor_device, &sensor_topics);
-        thread::sleep(SENSOR_INTERVAL);
+    thread::spawn(move || {
+        let mut brightness_changes = sensor_device.brightness_control.changes();
+        let mut last_sensors: Option<Instant> = None;
+        loop {
+            if last_sensors.is_none_or(|time| time.elapsed() >= SENSOR_INTERVAL) {
+                last_sensors = Some(Instant::now());
+                publish_sensors(&publisher, &sensor_device, &sensor_topics);
+            }
+            if sensor_device.brightness_control.changes() != brightness_changes {
+                brightness_changes = sensor_device.brightness_control.changes();
+                publish_backlight(&publisher, &sensor_device, &sensor_topics);
+            }
+            thread::sleep(CHANGE_INTERVAL);
+        }
     });
 
     for notification in connection.iter() {

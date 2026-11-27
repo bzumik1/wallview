@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::bluetooth::Bluetooth;
+use crate::brightness::{Brightness, Curve};
 use crate::radio::Radio;
 
 const BACKLIGHT: &str = "/sys/class/backlight/backlight";
@@ -26,6 +27,7 @@ pub struct Device {
     sign_in_requests: Arc<AtomicU64>,
     pub radio: Radio,
     pub bluetooth: Bluetooth,
+    pub brightness_control: Brightness,
 }
 
 fn read(path: impl AsRef<Path>) -> Option<String> {
@@ -57,6 +59,7 @@ impl Device {
             sign_in_requests: Arc::new(AtomicU64::new(0)),
             radio: Radio::load(),
             bluetooth: Bluetooth::load(),
+            brightness_control: Brightness::load(),
         }
     }
 
@@ -152,7 +155,15 @@ impl Device {
     }
 
     pub fn set_brightness(&self, value: u32) {
-        let value = value.clamp(1, self.max_brightness());
+        self.brightness_control.set_manual(|| self.write_brightness(value));
+    }
+
+    pub fn backlight_curve(&self) -> Curve {
+        Curve::from_scale(read(Path::new(BACKLIGHT).join("scale")).as_deref())
+    }
+
+    pub fn write_brightness(&self, value: u32) {
+        let value = value.clamp(1, self.max_brightness().max(1));
         let _ = fs::write(Path::new(BACKLIGHT).join("brightness"), value.to_string());
     }
 
