@@ -71,7 +71,16 @@ How it works (`agent/src/bluetooth/`):
 - The raw advertisement data (address, address type, RSSI, up to 62 bytes cut at an AD structure) comes from the kernel's management socket (`Device Found` and `Advertisement Monitor Device Found` events), because BlueZ's D-Bus API only offers parsed and merged device properties. It is sent to Home Assistant in batches of up to 16 every 100 ms (`BluetoothLERawAdvertisementsResponse`); a subscriber that falls more than 256 advertisements behind loses the newest ones.
 - The device info reports the proxy features (passive scan, raw advertisements) and the adapter's address only while the switch is on; switching closes the API connection so Home Assistant reconnects and reads them again.
 
-Not yet tested on the panel. Before the switch is recommended: about 20 power off/rfkill/power on cycles of the RTL8723DS over H5 without H5 errors in `dmesg` (nothing powered it off before), the advertisement monitor registering ("scanning passively" in `/tmp/wallview-agent.log`), Wi-Fi latency and dashboard frame rate with the switch off and on, and the CPU of `bluetoothd` and `dbus-daemon` in a busy radio environment. Way back on the panel: `echo 0 > /sys/class/rfkill/rfkillN/soft` (the Bluetooth one) and `rm /data/wallview/bluetooth-proxy`; nothing keeps the rfkill state across a reboot.
+Tested 2026-11-27 on the development panel (kernel 6.18.63, BlueZ 5.79, agent from `/tmp`, `main.conf` bind-mounted):
+- 50 power off/on cycles of the RTL8723DS (30 with rfkill, 20 with `bluetoothctl` only): one short system-wide stall (panfrost timeout, SDIO interrupt latency, then `hci0: command 0x0c45 tx timeout`) with a Wi-Fi re-association of about 5 s on cycle 10; the other 49 and a 2-minute idle control without errors or lost pings. Probably a rare stall that a power-on overlapped; the agent switches Bluetooth only on state changes.
+- Switch off: Bluetooth off (rfkill soft 1, unpowered) within 9 s of the agent's start, stays off, Home Assistant stays connected.
+- Switch on: "scanning passively with an advertisement monitor" (no discovery fallback; `Adv Monitor Manager created with supported features:0x00000000`, so bluetoothd filters), Home Assistant reconnects within 13 s and lists the panel as a Bluetooth scanner; about 26 Bluetooth UART interrupts per second; `bluetoothd`, `dbus-daemon` and the agent at 0 % CPU.
+- Ping over Wi-Fi (60 packets, avg/max): 5.1/11.5 ms with the switch off, 6.7/33.4 ms with it on, no loss.
+- Switch off again: Bluetooth off within 1 s.
+- BlueZ 5.79 warns `Unknown key ScanIntervalAdvMonitor` and `ScanWindowAdvMonitor` (its list of known keys spells them `…AdvMonitoring`), but its parser reads exactly these names, so the values apply. The `Unable set contents for /var/lib/bluetooth/…` errors come from the read-only root, independent of the proxy.
+- Not yet checked: the number of advertisements Home Assistant shows for the panel, and Improv without Wi-Fi (needs someone at the panel).
+
+Way back on the panel: `echo 0 > /sys/class/rfkill/rfkillN/soft` (the Bluetooth one) and `rm /data/wallview/bluetooth-proxy`; nothing keeps the rfkill state across a reboot.
 
 ## Protocol details
 
