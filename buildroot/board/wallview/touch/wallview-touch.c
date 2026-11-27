@@ -47,6 +47,7 @@ struct contact {
     int origin_x;
     int origin_y;
     int moved;
+    int reach;
     double vx;
     double vy;
     int blend;
@@ -63,10 +64,12 @@ struct options {
     int rejoin_min;
     double rejoin_slack;
     int hold_travel;
+    int start_travel;
     double hold_speed;
     double start_speed;
     int64_t hold_recent;
     int64_t coast;
+    int64_t coast_after;
     int coast_max;
     double coast_speed;
     int debug;
@@ -164,7 +167,11 @@ add_sample(struct contact *c, int64_t time)
     double dx = c->x - c->origin_x;
     double dy = c->y - c->origin_y;
 
-    if (dx * dx + dy * dy >= (double)opts->hold_travel * opts->hold_travel)
+    double reach = sqrt(dx * dx + dy * dy);
+
+    if (reach > c->reach)
+        c->reach = (int)reach;
+    if (reach >= opts->hold_travel)
         c->moved = 1;
 }
 
@@ -287,7 +294,8 @@ holds(int slot, int64_t time)
     const struct sample *last = &c->history[c->samples - 1];
     double speed = velocity(c, &c->vx, &c->vy);
     int age_ok = time - last->time <= opts->hold_recent;
-    int hold = age_ok && (speed >= opts->start_speed || (c->moved && speed >= opts->hold_speed));
+    int hold = age_ok && ((c->reach >= opts->start_travel && speed >= opts->start_speed) ||
+                          (c->moved && speed >= opts->hold_speed));
 
     if (opts->debug) {
         const struct sample *s = c->history;
@@ -327,7 +335,7 @@ handle_frame(int64_t time)
             c->blend = 1;
             add_sample(c, time);
         } else if (c->started) {
-            if (c->releasing) {
+            if (c->active) {
                 release(slot);
                 flush();
             }
@@ -335,6 +343,7 @@ handle_frame(int64_t time)
             c->active = 1;
             c->samples = 0;
             c->moved = 0;
+            c->reach = 0;
             c->blend = 0;
             c->offset_x = c->offset_y = 0;
             c->origin_x = c->x;
@@ -387,7 +396,8 @@ coast(const struct contact *c, const struct sample *last, int64_t target, int *x
 {
     double speed = sqrt(c->vx * c->vx + c->vy * c->vy);
 
-    if (opts->coast <= 0 || speed < opts->coast_speed || target <= last->time)
+    if (opts->coast <= 0 || speed <= 0 || speed < opts->coast_speed || target <= last->time ||
+        c->lift_at - last->time > opts->coast_after)
         return;
     double tau = (double)opts->coast / NSEC_PER_SEC;
     double t = (double)(target - last->time) / NSEC_PER_SEC;
@@ -508,7 +518,8 @@ load_positions(void)
     if (read_slots(ABS_MT_POSITION_X, xs) < 0 || read_slots(ABS_MT_POSITION_Y, ys) < 0)
         return;
     for (int slot = 0; slot < MAX_SLOTS; slot++) {
-        if (contacts[slot].x != xs[slot] || contacts[slot].y != ys[slot])
+        if (contacts[slot].active && !contacts[slot].releasing &&
+            (contacts[slot].x != xs[slot] || contacts[slot].y != ys[slot]))
             contacts[slot].dirty = 1;
         contacts[slot].x = xs[slot];
         contacts[slot].y = ys[slot];
@@ -672,7 +683,7 @@ env_number(const char *name, double fallback)
     number = strtod(value, &end);
     while (*end == ' ' || *end == '\n' || *end == '\t')
         end++;
-    if (*end || number < 0) {
+    if (*end || !isfinite(number) || number < 0) {
         fprintf(stderr, "wallview-touch: ignoring %s=%s\n", name, value);
         return fallback;
     }
@@ -699,10 +710,12 @@ main(int argc, char **argv)
         .rejoin_min = (int)env_number("WALLVIEW_TOUCH_REJOIN_PX", 30),
         .rejoin_slack = env_number("WALLVIEW_TOUCH_REJOIN_SLACK", 0.75),
         .hold_travel = (int)env_number("WALLVIEW_TOUCH_HOLD_TRAVEL_PX", 12),
+        .start_travel = (int)env_number("WALLVIEW_TOUCH_START_TRAVEL_PX", 8),
         .hold_speed = env_number("WALLVIEW_TOUCH_HOLD_PX_PER_S", 60),
         .start_speed = env_number("WALLVIEW_TOUCH_START_PX_PER_S", 150),
         .hold_recent = env_ms("WALLVIEW_TOUCH_HOLD_RECENT_MS", 100),
         .coast = env_ms("WALLVIEW_TOUCH_COAST_MS", 40),
+        .coast_after = env_ms("WALLVIEW_TOUCH_COAST_AFTER_MS", 40),
         .coast_max = (int)env_number("WALLVIEW_TOUCH_COAST_PX", 40),
         .coast_speed = env_number("WALLVIEW_TOUCH_COAST_PX_PER_S", 150),
         .debug = (int)env_number("WALLVIEW_TOUCH_DEBUG", 0),

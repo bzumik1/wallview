@@ -40,8 +40,8 @@ static void reset(void) { memset(contacts, 0, sizeof contacts); downs = ups = 0;
 static void defaults(void) {
 	setenv("WALLVIEW_TOUCH_LIFT_MS", "", 1);
 	o = (struct options){ .period = NSEC_PER_SEC / 120, .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 8), .max_prediction = 12 * MS, .max_sample_gap = 60 * MS,
-		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 100), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 12, .hold_speed = 60, .start_speed = 150,
-		.hold_recent = 100 * MS, .coast = 40 * MS, .coast_max = 40, .coast_speed = 150, .debug = getenv("DBG") != NULL };
+		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 100), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 12, .start_travel = 8, .hold_speed = 60, .start_speed = 150,
+		.hold_recent = 100 * MS, .coast = 40 * MS, .coast_after = 40 * MS, .coast_max = 40, .coast_speed = 150, .debug = getenv("DBG") != NULL };
 }
 static int64_t drag(int64_t t, int sl, double *x, double *y, double vx, double vy, int n, int64_t dt) {
 	for (int i = 0; i < n; i++) { t += dt; run_until(t); *x += vx * dt / NSEC_PER_SEC; *y += vy * dt / NSEC_PER_SEC; move(t, sl, (int)*x, (int)*y); drain(t); }
@@ -118,6 +118,28 @@ int main(void) {
 	for (int i = 1; i <= 8; i++) { t += 17 * MS; run_until(t); move(t, 0, 100 + i, 200); drain(t); }
 	t += 17 * MS; run_until(t); up(t, 0); drain(t);
 	printf("slow nudge: ups %d\n", ups); assert(ups == 1);
+
+	reset(); t += 500 * MS; down(t, 0, 16, 240, 240); drain(t);
+	for (int i = 1; i <= 3; i++) { t += 11 * MS; run_until(t); move(t, 0, 240 + 2 * i, 240); drain(t); }
+	t += 5 * MS; run_until(t); up(t, 0); drain(t);
+	t += 80 * MS; run_until(t); down(t, 0, 17, 244, 240); drain(t); t += 40 * MS; run_until(t); up(t, 0); drain(t);
+	printf("jittery double tap: downs %d ups %d\n", downs, ups); assert(downs == 2 && ups == 2);
+
+	reset(); t += 500 * MS; x = 40; y = 240; down(t, 0, 18, 40, 240); drain(t);
+	t = drag(t, 0, &x, &y, 1500, 0, 6, 17 * MS);
+	int stop_x = (int)x; t += 90 * MS; run_until(t); up(t, 0); drain(t);
+	run_until(t + 50 * MS); int after_pause = outx[0];
+	run_until(t + 200 * MS);
+	printf("lift after pause: at %d, last %d, ups %d\n", after_pause, stop_x, ups); assert(ups == 1 && after_pause - stop_x <= 2);
+
+	reset(); t += 500 * MS; down(t, 0, 19, 100, 100); drain(t); t += 30 * MS; run_until(t);
+	s(t, 0); ev(t, EV_ABS, ABS_MT_TRACKING_ID, -1); ev(t, EV_ABS, ABS_MT_TRACKING_ID, 20); ev(t, EV_ABS, ABS_MT_POSITION_X, 300); ev(t, EV_SYN, SYN_REPORT, 0); drain(t);
+	printf("lift and land in one frame: downs %d ups %d\n", downs, ups); assert(downs == 2 && ups == 1);
+	up(t + 20 * MS, 0); run_until(t + 200 * MS);
+
+	setenv("WALLVIEW_TOUCH_X", "nan", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
+	setenv("WALLVIEW_TOUCH_X", "abc", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
+	setenv("WALLVIEW_TOUCH_X", "7\n", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 7);
 
 	puts("ok");
 	return 0;

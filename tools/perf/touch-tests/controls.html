@@ -1,0 +1,293 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ovládací prvky</title>
+<link rel="stylesheet" href="common.css">
+<style>
+html, body { height: 100%; overflow: hidden; }
+#page { position: fixed; top: 40px; left: 0; right: 0; bottom: 0; overflow-y: auto; padding: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; }
+.card { background: var(--card); border-radius: 16px; padding: 12px; }
+.wide { grid-column: 1 / -1; }
+.card h4 { margin: 0 0 8px; font-weight: 500; font-size: 14px; display: flex; justify-content: space-between; }
+.card h4 span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.hslider { position: relative; height: 44px; border-radius: 12px; background: var(--card2); overflow: hidden; touch-action: none; }
+.hslider .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--on); opacity: .85; }
+.vrow { display: flex; gap: 14px; justify-content: center; }
+.vslider { position: relative; width: 96px; height: 220px; border-radius: 22px; background: var(--card2); overflow: hidden; touch-action: none; }
+.vslider .fill { position: absolute; left: 0; right: 0; bottom: 0; background: var(--on); opacity: .85; }
+.vslider.cover .fill { background: var(--blue); top: 0; bottom: auto; }
+.tile { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 14px; background: var(--card2); touch-action: manipulation; }
+.tile .icon { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: #333844; font-size: 18px; }
+.tile.on .icon { background: rgba(255,201,77,.25); }
+.tile b { font-weight: 500; display: block; }
+.tile small { color: var(--muted); }
+.switch { width: 52px; height: 30px; border-radius: 15px; background: #444a56; position: relative; margin-left: auto; transition: background .15s; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.on .switch { background: var(--blue); }
+.on .switch::after { transform: translateX(22px); }
+.btn { height: 64px; border-radius: 14px; background: var(--card2); display: grid; place-items: center; font-weight: 600; touch-action: manipulation; }
+.btn.flash { background: #2f6f3f; }
+#thermo, #wheel { display: block; margin: 0 auto; touch-action: none; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.result { color: var(--muted); font-size: 12px; margin-top: 6px; min-height: 16px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div id="page">
+<div class="card wide"><h4>Jas obývák <span id="hv">50 %</span></h4><div class="hslider" id="hs"><div class="fill"></div></div><div class="result" id="hr"></div></div>
+<div class="card wide"><h4>Jas a roleta svisle <span id="vv">50 % · 50 %</span></h4><div class="vrow"><div class="vslider" id="vs"><div class="fill"></div></div><div class="vslider cover" id="cs"><div class="fill"></div></div></div><div class="result" id="vr"></div></div>
+<div class="card wide"><h4>Přepínače <span id="tv"></span></h4><div class="grid2" id="toggles"></div><div class="result" id="tr"></div></div>
+<div class="card wide"><h4>Tlačítko: ťuk, dvojťuk, dlouhý stisk <span id="bv"></span></h4><div class="grid2"><div class="btn" id="b1">Scéna</div><div class="btn" id="b2">Zvonek</div></div><div class="result" id="br"></div></div>
+<div class="card"><h4>Termostat <span id="thv">21.0 °C</span></h4><canvas id="thermo" width="200" height="200" style="width:180px;height:180px"></canvas><div class="result" id="thr"></div></div>
+<div class="card"><h4>Barva <span id="wv"></span></h4><canvas id="wheel" width="200" height="200" style="width:180px;height:180px"></canvas><div class="result" id="wr"></div></div>
+</div>
+<script src="common.js"></script>
+<script>
+const results = { jumps: 0, twitches: 0, drags: 0 };
+function sliderStats() {
+	tt.set("posuvníky", `tahů ${results.drags}  skoky ${results.jumps}  ucuknutí ${results.twitches}`);
+}
+tt.onReset(() => {
+	results.jumps = results.twitches = results.drags = 0;
+	sliderStats();
+});
+sliderStats();
+function drag(el, value, apply, label, out) {
+	let hist = [];
+	let id = null;
+	el.addEventListener("pointerdown", (e) => {
+		id = e.pointerId;
+		el.setPointerCapture(id);
+		hist = [];
+		move(e);
+	});
+	function move(e) {
+		if (e.pointerId !== id) {
+			return;
+		}
+		const pts = e.getCoalescedEvents && e.type === "pointermove" ? e.getCoalescedEvents() : [e];
+		for (const p of pts.length ? pts : [e]) {
+			const v = value(p, el.getBoundingClientRect());
+			const prev = hist.length ? hist[hist.length - 1] : null;
+			if (prev && Math.abs(v - prev.v) > 8 && p.timeStamp - prev.t < 40) {
+				results.jumps++;
+			}
+			hist.push({ t: p.timeStamp, v });
+			apply(v);
+		}
+	}
+	el.addEventListener("pointermove", move);
+	const end = (e) => {
+		if (e.pointerId !== id) {
+			return;
+		}
+		id = null;
+		results.drags++;
+		const last = hist[hist.length - 1];
+		const before = [...hist].reverse().find((h) => last.t - h.t >= 60) || hist[0];
+		const twitch = Math.abs(last.v - before.v);
+		const stillBefore = hist.length > 3 && Math.abs(hist[hist.length - 2].v - before.v) < 1.5;
+		if (stillBefore && twitch > 3) {
+			results.twitches++;
+		}
+		out.textContent = `puštěno na ${last.v.toFixed(1)}, 60 ms předtím ${before.v.toFixed(1)}, puštění +${(e.timeStamp - last.t).toFixed(0)} ms`;
+		tt.record(label, { final: +last.v.toFixed(1), before: +before.v.toFixed(1), releaseDelay: Math.round(e.timeStamp - last.t), samples: hist.length });
+		sliderStats();
+	};
+	el.addEventListener("pointerup", end);
+	el.addEventListener("pointercancel", end);
+}
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const hs = document.getElementById("hs");
+drag(hs, (p, r) => clamp((p.clientX - r.left) / r.width * 100, 0, 100), (v) => {
+	hs.firstElementChild.style.width = `${v}%`;
+	document.getElementById("hv").textContent = `${Math.round(v)} %`;
+}, "slider-h", document.getElementById("hr"));
+hs.firstElementChild.style.width = "50%";
+const vs = document.getElementById("vs");
+const cs = document.getElementById("cs");
+let vb = 50;
+let cp = 50;
+const vtext = () => document.getElementById("vv").textContent = `${Math.round(vb)} % · ${Math.round(cp)} %`;
+drag(vs, (p, r) => clamp((r.bottom - p.clientY) / r.height * 100, 0, 100), (v) => {
+	vb = v;
+	vs.firstElementChild.style.height = `${v}%`;
+	vtext();
+}, "slider-v", document.getElementById("vr"));
+drag(cs, (p, r) => clamp((p.clientY - r.top) / r.height * 100, 0, 100), (v) => {
+	cp = v;
+	cs.firstElementChild.style.height = `${v}%`;
+	vtext();
+}, "cover", document.getElementById("vr"));
+vs.firstElementChild.style.height = "50%";
+cs.firstElementChild.style.height = "50%";
+const toggles = document.getElementById("toggles");
+const tnames = ["Lustr", "Lampa", "Zásuvka", "Ventilátor"];
+toggles.innerHTML = tnames.map((n) => `<div class="tile"><div class="icon">💡</div><div><b>${n}</b><small>Vypnuto</small></div><div class="switch"></div></div>`).join("");
+let tdowns = 0;
+let tclicks = 0;
+const tlat = [];
+for (const t of toggles.children) {
+	let down = 0;
+	t.addEventListener("pointerdown", (e) => {
+		tdowns++;
+		down = e.timeStamp;
+	});
+	t.addEventListener("click", (e) => {
+		tclicks++;
+		t.classList.toggle("on");
+		t.querySelector("small").textContent = t.classList.contains("on") ? "Zapnuto" : "Vypnuto";
+		const lat = down ? e.timeStamp - down : 0;
+		tlat.push(lat);
+		const s = [...tlat].sort((a, b) => a - b);
+		document.getElementById("tv").textContent = `${tclicks}/${tdowns}`;
+		document.getElementById("tr").textContent = `ťuk → přepnutí medián ${s[Math.floor(s.length / 2)].toFixed(0)} ms, max ${s[s.length - 1].toFixed(0)} ms`;
+		tt.record("toggle", { latency: Math.round(lat), downs: tdowns, clicks: tclicks });
+		tt.set("přepínače", `kliků ${tclicks} z dotyků ${tdowns}`);
+	});
+}
+tt.onReset(() => {
+	tdowns = tclicks = 0;
+	tlat.length = 0;
+});
+const counts = { tap: 0, double: 0, long: 0 };
+for (const b of [document.getElementById("b1"), document.getElementById("b2")]) {
+	let downAt = 0;
+	let timer = 0;
+	let longDone = false;
+	let lastTap = 0;
+	let pendingTap = 0;
+	b.addEventListener("pointerdown", (e) => {
+		downAt = e.timeStamp;
+		longDone = false;
+		clearTimeout(timer);
+		timer = setTimeout(() => {
+			longDone = true;
+			fire(b, "long");
+		}, 500);
+	});
+	const up = (e) => {
+		clearTimeout(timer);
+		if (longDone || e.type === "pointercancel") {
+			return;
+		}
+		if (e.timeStamp - lastTap < 300) {
+			clearTimeout(pendingTap);
+			lastTap = 0;
+			fire(b, "double");
+			return;
+		}
+		lastTap = e.timeStamp;
+		pendingTap = setTimeout(() => fire(b, "tap"), 300);
+	};
+	b.addEventListener("pointerup", up);
+	b.addEventListener("pointercancel", up);
+	b.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+function fire(b, kind) {
+	counts[kind]++;
+	b.classList.add("flash");
+	setTimeout(() => b.classList.remove("flash"), 200);
+	const label = { tap: "ťuk", double: "dvojťuk", long: "dlouhý stisk" }[kind];
+	document.getElementById("br").textContent = `${b.textContent}: ${label}`;
+	document.getElementById("bv").textContent = `${counts.tap} / ${counts.double} / ${counts.long}`;
+	tt.set("tlačítka", `ťuk ${counts.tap}  dvoj ${counts.double}  dlouhý ${counts.long}`);
+	tt.record("button", { button: b.textContent, kind });
+}
+tt.onReset(() => {
+	counts.tap = counts.double = counts.long = 0;
+});
+const thermo = document.getElementById("thermo");
+const tc = thermo.getContext("2d");
+let target = 21;
+const A0 = Math.PI * 0.75;
+const SPAN = Math.PI * 1.5;
+function drawThermo() {
+	tc.clearRect(0, 0, 200, 200);
+	tc.lineCap = "round";
+	tc.lineWidth = 18;
+	tc.strokeStyle = "#333844";
+	tc.beginPath();
+	tc.arc(100, 100, 80, A0, A0 + SPAN);
+	tc.stroke();
+	const f = (target - 7) / 28;
+	tc.strokeStyle = "#ff8a3d";
+	tc.beginPath();
+	tc.arc(100, 100, 80, A0, A0 + SPAN * f);
+	tc.stroke();
+	const a = A0 + SPAN * f;
+	tc.fillStyle = "#fff";
+	tc.beginPath();
+	tc.arc(100 + 80 * Math.cos(a), 100 + 80 * Math.sin(a), 11, 0, Math.PI * 2);
+	tc.fill();
+	tc.fillStyle = "#e6e8ec";
+	tc.font = "600 34px system-ui";
+	tc.textAlign = "center";
+	tc.textBaseline = "middle";
+	tc.fillText(target.toFixed(1), 100, 100);
+	document.getElementById("thv").textContent = `${target.toFixed(1)} °C`;
+}
+drawThermo();
+drag(thermo, (p, r) => {
+	const x = (p.clientX - r.left) / r.width * 200 - 100;
+	const y = (p.clientY - r.top) / r.height * 200 - 100;
+	let a = Math.atan2(y, x);
+	if (a < A0 - Math.PI * 0.25 - 1e-9) {
+		a += Math.PI * 2;
+	}
+	const f = clamp((a - A0) / SPAN, 0, 1);
+	return Math.round((7 + f * 28) * 2) / 2 * (100 / 35);
+}, (v) => {
+	target = v * 35 / 100;
+	drawThermo();
+}, "thermostat", document.getElementById("thr"));
+const wheel = document.getElementById("wheel");
+const wc = wheel.getContext("2d");
+const img = wc.createImageData(200, 200);
+for (let y = 0; y < 200; y++) {
+	for (let x = 0; x < 200; x++) {
+		const dx = x - 100;
+		const dy = y - 100;
+		const r = Math.hypot(dx, dy) / 96;
+		const i = (y * 200 + x) * 4;
+		if (r > 1) {
+			continue;
+		}
+		const h = (Math.atan2(dy, dx) / Math.PI / 2 + 1) % 1;
+		const k = (n) => (n + h * 6) % 6;
+		const f = (n) => 1 - r * Math.max(0, Math.min(k(n), 4 - k(n), 1));
+		img.data[i] = f(5) * 255;
+		img.data[i + 1] = f(3) * 255;
+		img.data[i + 2] = f(1) * 255;
+		img.data[i + 3] = 255;
+	}
+}
+let marker = { x: 100, y: 100 };
+function drawWheel() {
+	wc.putImageData(img, 0, 0);
+	wc.lineWidth = 3;
+	wc.strokeStyle = "#fff";
+	wc.beginPath();
+	wc.arc(marker.x, marker.y, 10, 0, Math.PI * 2);
+	wc.stroke();
+}
+drawWheel();
+drag(wheel, (p, r) => {
+	let x = (p.clientX - r.left) / r.width * 200 - 100;
+	let y = (p.clientY - r.top) / r.height * 200 - 100;
+	const d = Math.hypot(x, y);
+	if (d > 96) {
+		x *= 96 / d;
+		y *= 96 / d;
+	}
+	marker = { x: x + 100, y: y + 100 };
+	return (Math.atan2(y, x) / Math.PI / 2 + 1) % 1 * 100;
+}, (v) => {
+	document.getElementById("wv").textContent = `odstín ${Math.round(v * 3.6)}°`;
+	drawWheel();
+}, "color", document.getElementById("wr"));
+</script>
+</body>
+</html>

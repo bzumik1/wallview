@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tap mřížka</title>
+<link rel="stylesheet" href="common.css">
+<style>
+html, body { height: 100%; overflow: hidden; }
+#area { position: fixed; top: 40px; left: 0; right: 0; bottom: 0; touch-action: none; }
+#target { position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 6px rgba(255,178,63,.25); }
+#target::after { content: ""; position: absolute; left: 20px; top: 20px; width: 4px; height: 4px; border-radius: 50%; background: #000; }
+.hit { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: #fff; pointer-events: none; }
+.hit.far { background: var(--bad); }
+#info { position: fixed; left: 8px; top: 48px; color: var(--muted); font-size: 12px; white-space: pre; pointer-events: none; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div id="area"><div id="target"></div></div>
+<div id="info"></div>
+<script src="common.js"></script>
+<script>
+const area = document.getElementById("area");
+const target = document.getElementById("target");
+const info = document.getElementById("info");
+const spots = [];
+for (const fy of [0.04, 0.5, 0.96]) {
+	for (const fx of [0.04, 0.5, 0.96]) {
+		spots.push([fx, fy]);
+	}
+}
+for (let i = 0; i < 9; i++) {
+	spots.push([0.2 + 0.3 * (i % 3), 0.2 + 0.3 * Math.floor(i / 3)]);
+}
+let order = [];
+let cur = null;
+let hits = [];
+let downs = 0;
+let extraDowns = 0;
+let downAt = 0;
+function next() {
+	if (!order.length) {
+		order = spots.map((s, i) => i).sort(() => Math.random() - 0.5);
+	}
+	const k = order.pop();
+	const r = area.getBoundingClientRect();
+	const [fx, fy] = spots[k];
+	cur = { k, edge: fx < 0.1 || fx > 0.9 || fy < 0.1 || fy > 0.9, x: Math.round(Math.max(22, Math.min(r.width - 22, fx * r.width))), y: Math.round(Math.max(22, Math.min(r.height - 22, fy * r.height))) };
+	target.style.left = `${cur.x}px`;
+	target.style.top = `${cur.y}px`;
+}
+function summary(list) {
+	if (!list.length) {
+		return "-";
+	}
+	const e = list.map((h) => Math.hypot(h.dx, h.dy)).sort((a, b) => a - b);
+	const mx = list.reduce((a, h) => a + h.dx, 0) / list.length;
+	const my = list.reduce((a, h) => a + h.dy, 0) / list.length;
+	return `n ${list.length}  chyba medián ${e[Math.floor(e.length / 2)].toFixed(1)} px  max ${e[e.length - 1].toFixed(0)}  posun ${mx.toFixed(1)},${my.toFixed(1)}`;
+}
+function show() {
+	const d = hits.map((h) => h.duration).sort((a, b) => a - b);
+	info.textContent = `střed  ${summary(hits.filter((h) => !h.edge))}\nokraje ${summary(hits.filter((h) => h.edge))}\n` +
+		`dotyků ${downs}  navíc ${extraDowns}  délka ťuku medián ${d.length ? d[Math.floor(d.length / 2)].toFixed(0) : "-"} ms`;
+}
+area.addEventListener("pointerdown", (e) => {
+	downs++;
+	const r = area.getBoundingClientRect();
+	const x = e.clientX - r.left;
+	const y = e.clientY - r.top;
+	if (performance.now() - downAt < 150) {
+		extraDowns++;
+	}
+	downAt = performance.now();
+	const dx = x - cur.x;
+	const dy = y - cur.y;
+	const dot = document.createElement("div");
+	dot.className = Math.hypot(dx, dy) > 22 ? "hit far" : "hit";
+	dot.style.left = `${x}px`;
+	dot.style.top = `${y}px`;
+	area.append(dot);
+	cur.pending = { dx, dy, edge: cur.edge, k: cur.k, t: e.timeStamp };
+});
+area.addEventListener("pointerup", (e) => {
+	if (!cur.pending) {
+		return;
+	}
+	const h = Object.assign(cur.pending, { duration: e.timeStamp - cur.pending.t });
+	hits.push(h);
+	tt.record("tap", { spot: h.k, edge: h.edge, dx: Math.round(h.dx), dy: Math.round(h.dy), duration: Math.round(h.duration) });
+	cur.pending = null;
+	show();
+	next();
+});
+tt.onReset(() => {
+	hits = [];
+	downs = extraDowns = 0;
+	area.querySelectorAll(".hit").forEach((d) => d.remove());
+	show();
+});
+next();
+show();
+</script>
+</body>
+</html>

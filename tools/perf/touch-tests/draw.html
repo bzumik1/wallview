@@ -1,0 +1,433 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kreslení</title>
+<style>
+html, body { margin: 0; height: 100%; background: #000; color: #ddd; font: 12px system-ui, sans-serif; overflow: hidden; user-select: none; -webkit-user-select: none; }
+canvas#c { position: fixed; inset: 0; width: 100vw; height: 100vh; touch-action: none; }
+#stats { position: fixed; left: 6px; top: 4px; pointer-events: none; white-space: pre; font-variant-numeric: tabular-nums; line-height: 1.3; z-index: 5; text-shadow: 0 0 3px #000; }
+.btn { position: fixed; right: 6px; z-index: 6; padding: 8px 12px; font: 600 13px system-ui, sans-serif; color: #fff; background: #333; border: 1px solid #666; border-radius: 8px; }
+#back { position: fixed; right: 6px; bottom: 6px; z-index: 6; padding: 8px 12px; font: 600 13px system-ui, sans-serif; color: #fff; background: #333; border: 1px solid #666; border-radius: 8px; text-decoration: none; }
+#reset { top: 6px; }
+#mode { top: 46px; }
+#dots { top: 86px; }
+#list { position: fixed; inset: 0; overflow-y: scroll; display: none; touch-action: pan-y; }
+#list div { height: 80px; display: flex; align-items: center; padding-left: 200px; font: 600 22px system-ui, sans-serif; color: #000; }
+#trace { position: fixed; left: 0; bottom: 0; width: 100vw; height: 70px; pointer-events: none; display: none; z-index: 5; background: rgba(0,0,0,.6); }
+#taps { position: fixed; inset: 0; display: none; padding: 120px 10px 10px; box-sizing: border-box; }
+#taps .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+#taps button { height: 80px; font: 600 15px system-ui, sans-serif; color: #fff; background: #234; border: 1px solid #567; border-radius: 10px; touch-action: manipulation; }
+#taps button.hit { background: #2a6; }
+#taps input { width: 100%; height: 40px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<a id="back" href="index.html">◀ Testy</a>
+<canvas id="c"></canvas>
+<div id="list"></div>
+<canvas id="trace"></canvas>
+<div id="taps">
+<div class="grid">
+<button data-k="a">tap A</button>
+<button data-k="b">tap B</button>
+<button data-k="c">tap C</button>
+<button data-k="long">long press</button>
+</div>
+<input id="slider" type="range" min="0" max="200" value="100">
+</div>
+<div id="stats"></div>
+<button id="reset" class="btn">Reset</button>
+<button id="mode" class="btn">mode: draw</button>
+<button id="dots" class="btn">dots: on</button>
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const stats = document.getElementById("stats");
+const list = document.getElementById("list");
+const trace = document.getElementById("trace");
+const tctx = trace.getContext("2d");
+const taps = document.getElementById("taps");
+const slider = document.getElementById("slider");
+const modes = ["draw", "scroll", "tap"];
+const log = [];
+window.__touchLog = log;
+let mode = "draw";
+let dots = true;
+let times = [];
+let frames = [];
+let strokes = new Map();
+let lastUp = null;
+let last = null;
+let totals;
+
+function zero() {
+	totals = { strokes: 0, breaks: 0, stalls: 0, backsteps: 0, jumps: 0, held: 0 };
+}
+
+function resize() {
+	const r = devicePixelRatio || 1;
+	for (const cv of [canvas, trace]) {
+		cv.width = Math.round(cv.clientWidth * r);
+		cv.height = Math.round(cv.clientHeight * r);
+		cv.getContext("2d").setTransform(r, 0, 0, r, 0, 0);
+	}
+	clear();
+}
+
+function clear() {
+	ctx.fillStyle = "#000";
+	ctx.fillRect(0, 0, innerWidth, innerHeight);
+	strokes.clear();
+	times = [];
+	lastUp = null;
+	last = null;
+	zero();
+	scrollState.trace = [];
+	scrollState.stalls = 0;
+	scrollState.fling = null;
+	tapState.reset();
+}
+
+function ring(x, y, r, c, w) {
+	ctx.strokeStyle = c;
+	ctx.lineWidth = w || 2;
+	ctx.beginPath();
+	ctx.arc(x, y, r, 0, Math.PI * 2);
+	ctx.stroke();
+}
+
+function label(x, y, s, c) {
+	ctx.fillStyle = c;
+	ctx.font = "11px system-ui";
+	ctx.fillText(s, x + 8, y - 8);
+}
+
+function intervalColor(dt) {
+	return dt <= 22 ? "#6f6" : dt <= 35 ? "#fd4" : "#f44";
+}
+
+function median(a) {
+	if (!a.length) {
+		return 0;
+	}
+	const s = [...a].sort((x, y) => x - y);
+	return s[Math.floor(s.length / 2)];
+}
+
+function addPoint(s, t, x, y) {
+	const prev = s.pts[s.pts.length - 1];
+	const dt = t - prev.t;
+	const dx = x - prev.x;
+	const dy = y - prev.y;
+	const d = Math.hypot(dx, dy);
+	ctx.strokeStyle = "#4fc3f7";
+	ctx.lineWidth = 2;
+	ctx.beginPath();
+	ctx.moveTo(prev.x, prev.y);
+	ctx.lineTo(x, y);
+	ctx.stroke();
+	if (s.pd && (dx * s.pd.x + dy * s.pd.y) < 0 && d > 0 && d <= 8) {
+		s.backsteps++;
+		totals.backsteps++;
+		ring(x, y, 4, "#fa0", 2);
+	}
+	if (dt >= 40) {
+		s.stalls.push(Math.round(dt));
+		totals.stalls++;
+		ring(x, y, 7 + Math.min(dt, 150) / 15, "#f80", 2);
+		label(x, y, `${Math.round(dt)}ms ${Math.round(d)}px`, "#f80");
+	}
+	if (d > 0) {
+		s.pd = { x: dx, y: dy };
+	}
+	s.maxStep = Math.max(s.maxStep, d);
+	s.gaps.push(dt);
+	if (dots) {
+		ctx.fillStyle = intervalColor(dt);
+		ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+	}
+	s.pts.push({ t, x, y });
+	times.push(t);
+}
+
+function velocityBefore(pts, end, window) {
+	let i = pts.length - 1;
+	while (i > 0 && pts[i - 1].t >= end - window) {
+		i--;
+	}
+	const a = pts[i];
+	const b = pts[pts.length - 1];
+	const span = end - a.t;
+	return span > 0 ? Math.hypot(b.x - a.x, b.y - a.y) / span * 1000 : 0;
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+	canvas.setPointerCapture(e.pointerId);
+	const t = e.timeStamp;
+	const s = { down: t, pts: [{ t, x: e.clientX, y: e.clientY }], gaps: [], stalls: [], backsteps: 0, maxStep: 0, pd: null };
+	strokes.set(e.pointerId, s);
+	ring(e.clientX, e.clientY, 5, "#6f6", 2);
+	if (lastUp && t - lastUp.t < 250 && Math.hypot(e.clientX - lastUp.x, e.clientY - lastUp.y) < 120) {
+		totals.breaks++;
+		ctx.strokeStyle = "#f0f";
+		ctx.setLineDash([4, 4]);
+		ctx.beginPath();
+		ctx.moveTo(lastUp.x, lastUp.y);
+		ctx.lineTo(e.clientX, e.clientY);
+		ctx.stroke();
+		ctx.setLineDash([]);
+		label(e.clientX, e.clientY, `break ${Math.round(t - lastUp.t)}ms`, "#f0f");
+	}
+});
+
+canvas.addEventListener("pointermove", (e) => {
+	const s = strokes.get(e.pointerId);
+	if (!s) {
+		return;
+	}
+	const co = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+	for (const p of (co.length ? co : [e])) {
+		addPoint(s, p.timeStamp, p.clientX, p.clientY);
+	}
+});
+
+function endStroke(e) {
+	const s = strokes.get(e.pointerId);
+	if (!s) {
+		return;
+	}
+	strokes.delete(e.pointerId);
+	const t = e.timeStamp;
+	const lp = s.pts[s.pts.length - 1];
+	const delay = t - lp.t;
+	const travel = Math.hypot(lp.x - s.pts[0].x, lp.y - s.pts[0].y);
+	if (delay >= 60) {
+		totals.held++;
+	}
+	ring(lp.x, lp.y, 5, "#f44", 2);
+	label(lp.x, lp.y + 16, `up +${Math.round(delay)}ms`, "#f88");
+	last = {
+		type: e.type,
+		duration: Math.round(t - s.down),
+		moves: s.pts.length - 1,
+		medianInterval: +median(s.gaps).toFixed(1),
+		maxInterval: Math.round(Math.max(0, ...s.gaps)),
+		stalls: s.stalls,
+		maxStep: Math.round(s.maxStep),
+		backsteps: s.backsteps,
+		travel: Math.round(travel),
+		releaseDelay: Math.round(delay),
+		vLastMove: Math.round(velocityBefore(s.pts, lp.t, 50)),
+		vAtUp: Math.round(velocityBefore(s.pts, t, 100)),
+	};
+	log.push(last);
+	totals.strokes++;
+	lastUp = { t, x: lp.x, y: lp.y };
+}
+
+for (const type of ["pointerup", "pointercancel"]) {
+	canvas.addEventListener(type, endStroke);
+}
+
+const scrollState = { down: false, trace: [], prev: 0, stalls: 0, zeroRun: 0, movedSinceDown: false, upAt: 0, lastMoveFrame: 0, fling: null };
+
+for (let i = 0; i < 80; i++) {
+	const d = document.createElement("div");
+	d.textContent = i;
+	d.style.background = i % 2 ? "#9cf" : "#fc9";
+	list.appendChild(d);
+}
+list.addEventListener("touchstart", () => {
+	scrollState.down = true;
+	scrollState.movedSinceDown = false;
+	scrollState.zeroRun = 0;
+	scrollState.fling = null;
+}, { passive: true });
+list.addEventListener("touchend", (e) => {
+	scrollState.down = false;
+	scrollState.upAt = e.timeStamp;
+	scrollState.fling = { up: e.timeStamp, start: 0, distance: 0, lastChange: 0, firstDelta: 0 };
+}, { passive: true });
+
+function scrollFrame(now) {
+	const top = list.scrollTop;
+	const delta = top - scrollState.prev;
+	scrollState.prev = top;
+	const st = scrollState;
+	if (st.down) {
+		if (delta !== 0) {
+			if (st.movedSinceDown && st.zeroRun >= 3) {
+				st.stalls++;
+			}
+			st.movedSinceDown = true;
+			st.zeroRun = 0;
+			st.lastMoveFrame = now;
+		} else {
+			st.zeroRun++;
+		}
+	} else if (st.fling) {
+		if (delta !== 0) {
+			if (!st.fling.start) {
+				st.fling.start = now;
+				st.fling.firstDelta = delta;
+			}
+			st.fling.distance += Math.abs(delta);
+			st.fling.lastChange = now;
+		}
+	}
+	st.trace.push({ d: delta, down: st.down });
+	if (st.trace.length > 120) {
+		st.trace.shift();
+	}
+	const w = trace.clientWidth;
+	const h = trace.clientHeight;
+	tctx.clearRect(0, 0, w, h);
+	const bw = w / 120;
+	for (let i = 0; i < st.trace.length; i++) {
+		const f = st.trace[i];
+		const bh = Math.min(h - 2, Math.abs(f.d) * 2);
+		tctx.fillStyle = f.down ? "#4fc3f7" : "#6f6";
+		if (f.d === 0 && f.down) {
+			tctx.fillStyle = "#f44";
+			tctx.fillRect(i * bw, h - 3, bw - 1, 3);
+		} else {
+			tctx.fillRect(i * bw, h - bh, bw - 1, bh);
+		}
+	}
+}
+
+const tapState = {
+	counts: {},
+	reset() {
+		this.counts = {};
+		this.lastDelay = 0;
+		this.long = { long: 0, short: 0 };
+		this.slider = { values: [], release: null };
+	},
+};
+tapState.reset();
+for (const b of taps.querySelectorAll("button")) {
+	const k = b.dataset.k;
+	let downAt = 0;
+	let timer = 0;
+	b.addEventListener("pointerdown", (e) => {
+		downAt = e.timeStamp;
+		const c = tapState.counts[k] || (tapState.counts[k] = { downs: 0, clicks: 0 });
+		c.downs++;
+		if (k === "long") {
+			clearTimeout(timer);
+			timer = setTimeout(() => { timer = 0; tapState.long.long++; b.classList.add("hit"); }, 500);
+		}
+	});
+	b.addEventListener("pointerup", () => {
+		if (k === "long" && timer) {
+			clearTimeout(timer);
+			timer = 0;
+			tapState.long.short++;
+		}
+		setTimeout(() => b.classList.remove("hit"), 120);
+	});
+	b.addEventListener("contextmenu", (e) => e.preventDefault());
+	b.addEventListener("click", (e) => {
+		const c = tapState.counts[k] || (tapState.counts[k] = { downs: 0, clicks: 0 });
+		c.clicks++;
+		tapState.lastDelay = Math.round(e.timeStamp - downAt);
+		b.classList.add("hit");
+		setTimeout(() => b.classList.remove("hit"), 120);
+	});
+}
+let lastInput = 0;
+slider.addEventListener("input", (e) => {
+	lastInput = e.timeStamp;
+	const v = tapState.slider.values;
+	v.push(+slider.value);
+	if (v.length > 8) {
+		v.shift();
+	}
+});
+slider.addEventListener("change", (e) => {
+	tapState.slider.release = { value: +slider.value, delay: Math.round(e.timeStamp - lastInput), tail: tapState.slider.values.join(" ") };
+	log.push({ slider: tapState.slider.release });
+});
+
+function setMode(m) {
+	mode = m;
+	document.getElementById("mode").textContent = `mode: ${m}`;
+	canvas.style.display = m === "draw" ? "block" : "none";
+	list.style.display = m === "scroll" ? "block" : "none";
+	trace.style.display = m === "scroll" ? "block" : "none";
+	taps.style.display = m === "tap" ? "block" : "none";
+	if (m === "scroll") {
+		resize();
+	}
+}
+
+document.getElementById("reset").addEventListener("click", clear);
+document.getElementById("mode").addEventListener("click", () => setMode(modes[(modes.indexOf(mode) + 1) % modes.length]));
+document.getElementById("dots").addEventListener("click", (e) => {
+	dots = !dots;
+	e.target.textContent = `dots: ${dots ? "on" : "off"}`;
+});
+
+function drawStats() {
+	const gaps = [];
+	for (let i = 1; i < times.length; i++) {
+		gaps.push(times[i] - times[i - 1]);
+	}
+	const head = `frames/s ${frames.length}\n`;
+	if (mode === "draw") {
+		let s = head +
+			`moves/s ${times.length}  interval med ${median(gaps).toFixed(1)} ms\n` +
+			`strokes ${totals.strokes}  breaks ${totals.breaks}  held ups ${totals.held}\n` +
+			`stalls>=40ms ${totals.stalls}  backsteps ${totals.backsteps}\n`;
+		if (last) {
+			s += `last: ${last.duration}ms ${last.moves} moves, int med ${last.medianInterval} max ${last.maxInterval}\n` +
+				`  stalls [${last.stalls.join(",")}] max step ${last.maxStep}px back ${last.backsteps}\n` +
+				`  up +${last.releaseDelay}ms  v last ${last.vLastMove} / at up ${last.vAtUp} px/s`;
+		}
+		return s;
+	}
+	if (mode === "scroll") {
+		const f = scrollState.fling;
+		let s = head + `scroll stalls (>=3 still frames while down) ${scrollState.stalls}\n`;
+		if (f && f.start) {
+			s += `fling: freeze ${Math.round(f.start - scrollState.lastMoveFrame)} ms, ` +
+				`up->fling ${Math.round(f.start - f.up)} ms, first ${Math.abs(f.firstDelta).toFixed(0)} px/frame, distance ${Math.round(f.distance)} px`;
+		} else if (f) {
+			s += `no fling after up`;
+		}
+		return s;
+	}
+	const c = tapState.counts;
+	const fmt = (k) => c[k] ? `${c[k].downs}/${c[k].clicks}` : "0/0";
+	const sl = tapState.slider.release;
+	return head +
+		`downs/clicks  A ${fmt("a")}  B ${fmt("b")}  C ${fmt("c")}  long ${fmt("long")}\n` +
+		`down->click ${tapState.lastDelay} ms   long press: long ${tapState.long.long} short ${tapState.long.short}\n` +
+		`slider ${slider.value}` + (sl ? `  released ${sl.value} after +${sl.delay}ms  tail ${sl.tail}` : "");
+}
+
+function tick(now) {
+	frames.push(now);
+	while (frames.length && now - frames[0] > 1000) {
+		frames.shift();
+	}
+	while (times.length && now - times[0] > 1000) {
+		times.shift();
+	}
+	if (mode === "scroll") {
+		scrollFrame(now);
+	}
+	stats.textContent = drawStats();
+	requestAnimationFrame(tick);
+}
+
+addEventListener("resize", resize);
+zero();
+resize();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
