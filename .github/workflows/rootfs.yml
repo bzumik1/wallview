@@ -130,6 +130,14 @@ jobs:
           path: /home/runner/br/images/rootfs.erofs
           retention-days: 30
 
+      - name: Upload WebKit symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: webkit-symbols
+          path: /home/runner/br/host/aarch64-buildroot-linux-gnu/sysroot/usr/lib/libWPEWebKit-2.0.so.1.*
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
