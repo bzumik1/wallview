@@ -1,4 +1,5 @@
 mod api;
+mod bluetooth;
 mod config;
 mod device;
 mod discovery;
@@ -46,6 +47,8 @@ fn main() {
         }
     }
 
+    let bluetooth = device.bluetooth.clone();
+    thread::spawn(move || bluetooth::run(bluetooth));
     start_improv_when_needed(device.clone());
     let discovery_device = device.clone();
     thread::spawn(move || discovery::run(discovery_device));

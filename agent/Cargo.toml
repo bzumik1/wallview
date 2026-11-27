@@ -9,6 +9,7 @@ description = "Home Assistant integration of the WallView panel: ESPHome native 
 base64 = "0.22"
 libc = "0.2"
 bluer = { version = "0.17", features = ["bluetoothd"] }
+futures = "0.3"
 mdns-sd = "0.13"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 prost = "0.13"

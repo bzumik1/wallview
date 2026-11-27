@@ -15,9 +15,10 @@ use base64::Engine;
 use prost::Message;
 
 use crate::api::{
-    DeviceInfoResponse, DisconnectResponse, HelloResponse, HomeassistantActionRequest, ListEntitiesDoneResponse,
+    BluetoothLeRawAdvertisement, BluetoothLeRawAdvertisementsResponse, DeviceInfoResponse, DisconnectResponse, HelloResponse, HomeassistantActionRequest, ListEntitiesDoneResponse,
     NoiseEncryptionSetKeyRequest, NoiseEncryptionSetKeyResponse, PingResponse,
 };
+use crate::bluetooth::Subscription;
 use crate::device::Device;
 
 use frame::{Connection, Sender};
@@ -26,6 +27,10 @@ const PORT: u16 = 6053;
 const ESPHOME_VERSION: &str = "2025.9.0";
 const SENSOR_INTERVAL: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+const ADVERTISEMENT_INTERVAL: Duration = Duration::from_millis(100);
+const ADVERTISEMENT_BATCH: usize = 16;
+const PROXY_PASSIVE_SCAN: u32 = 1;
+const PROXY_RAW_ADVERTISEMENTS: u32 = 1 << 5;
 const SIGN_IN_REQUESTED_EVENT: &str = "esphome.wallview_sign_in_requested";
 
 pub mod message_type {
@@ -41,16 +46,19 @@ pub mod message_type {
     pub const LIST_ENTITIES_BINARY_SENSOR: u16 = 12;
     pub const LIST_ENTITIES_LIGHT: u16 = 15;
     pub const LIST_ENTITIES_SENSOR: u16 = 16;
+    pub const LIST_ENTITIES_SWITCH: u16 = 17;
     pub const LIST_ENTITIES_TEXT_SENSOR: u16 = 18;
     pub const LIST_ENTITIES_DONE: u16 = 19;
     pub const SUBSCRIBE_STATES_REQUEST: u16 = 20;
     pub const BINARY_SENSOR_STATE: u16 = 21;
     pub const LIGHT_STATE: u16 = 24;
     pub const SENSOR_STATE: u16 = 25;
+    pub const SWITCH_STATE: u16 = 26;
     pub const TEXT_SENSOR_STATE: u16 = 27;
     pub const LIST_ENTITIES_SERVICES: u16 = 41;
     pub const EXECUTE_SERVICE_REQUEST: u16 = 42;
     pub const LIGHT_COMMAND_REQUEST: u16 = 32;
+    pub const SWITCH_COMMAND_REQUEST: u16 = 33;
     pub const SUBSCRIBE_HOMEASSISTANT_SERVICES_REQUEST: u16 = 34;
     pub const HOMEASSISTANT_ACTION_REQUEST: u16 = 35;
     pub const LIST_ENTITIES_SELECT: u16 = 52;
@@ -58,6 +66,9 @@ pub mod message_type {
     pub const SELECT_COMMAND_REQUEST: u16 = 54;
     pub const LIST_ENTITIES_BUTTON: u16 = 61;
     pub const BUTTON_COMMAND_REQUEST: u16 = 62;
+    pub const SUBSCRIBE_BLUETOOTH_LE_ADVERTISEMENTS_REQUEST: u16 = 66;
+    pub const UNSUBSCRIBE_BLUETOOTH_LE_ADVERTISEMENTS_REQUEST: u16 = 87;
+    pub const BLUETOOTH_LE_RAW_ADVERTISEMENTS_RESPONSE: u16 = 93;
     pub const LIST_ENTITIES_TEXT: u16 = 97;
     pub const TEXT_STATE: u16 = 98;
     pub const TEXT_COMMAND_REQUEST: u16 = 99;
@@ -126,6 +137,7 @@ pub fn serve(device: Device, keys: KeyStore) {
 struct Subscriptions {
     states: bool,
     actions: bool,
+    advertisements: Option<Subscription>,
 }
 
 enum Incoming {
@@ -163,13 +175,17 @@ fn handle_client(
     let mut sign_in_requests = device.sign_in_requests();
     let mut last_presence = None;
     let mut radio_changes = device.radio.changes();
+    let mut bluetooth_changes = device.bluetooth.changes();
+    let proxy_at_connect = device.bluetooth.proxy_enabled();
     let mut last_sensors = Instant::now();
+    let mut last_states = Instant::now();
     loop {
         if keys.generation() != generation {
             sender.close();
             return Ok(());
         }
-        match messages.recv_timeout(POLL_INTERVAL) {
+        let interval = if subscriptions.advertisements.is_some() { ADVERTISEMENT_INTERVAL } else { POLL_INTERVAL };
+        match messages.recv_timeout(interval) {
             Ok(Incoming::Message(message_type, data)) => {
                 if !handle_message(&sender, device, keys, advertisement, message_type, &data, &mut subscriptions)? {
                     return Ok(());
@@ -195,9 +211,24 @@ fn handle_client(
                 )?;
             }
         }
-        if !subscriptions.states {
+        if let Some(advertisements) = &subscriptions.advertisements {
+            send_advertisements(&sender, advertisements)?;
+        }
+        if device.bluetooth.changes() != bluetooth_changes {
+            bluetooth_changes = device.bluetooth.changes();
+            if subscriptions.states {
+                let (message_type, data) = entities::bluetooth_proxy_state(device);
+                sender.send(message_type, &data)?;
+            }
+            if device.bluetooth.proxy_enabled() != proxy_at_connect {
+                sender.close();
+                return Ok(());
+            }
+        }
+        if !subscriptions.states || last_states.elapsed() < POLL_INTERVAL {
             continue;
         }
+        last_states = Instant::now();
         if device.radio.changes() != radio_changes {
             radio_changes = device.radio.changes();
             for (message_type, data) in entities::radio_states(device) {
@@ -216,6 +247,38 @@ fn handle_client(
                 sender.send(message_type, &data)?;
             }
         }
+    }
+}
+
+fn raw_advertisements(advertisements: Vec<crate::bluetooth::Advertisement>) -> Vec<BluetoothLeRawAdvertisementsResponse> {
+    advertisements
+        .chunks(ADVERTISEMENT_BATCH)
+        .map(|batch| BluetoothLeRawAdvertisementsResponse {
+            advertisements: batch
+                .iter()
+                .map(|advertisement| BluetoothLeRawAdvertisement {
+                    address: advertisement.address,
+                    rssi: advertisement.rssi,
+                    address_type: advertisement.address_type,
+                    data: advertisement.data.clone(),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn send_advertisements(sender: &Sender, subscription: &Subscription) -> io::Result<()> {
+    for batch in raw_advertisements(subscription.pending()) {
+        send_message(sender, message_type::BLUETOOTH_LE_RAW_ADVERTISEMENTS_RESPONSE, batch)?;
+    }
+    Ok(())
+}
+
+fn proxy_feature_flags(enabled: bool) -> u32 {
+    if enabled {
+        PROXY_PASSIVE_SCAN | PROXY_RAW_ADVERTISEMENTS
+    } else {
+        0
     }
 }
 
@@ -259,6 +322,8 @@ fn handle_message(
                 project_version: env!("CARGO_PKG_VERSION").into(),
                 api_encryption_supported: true,
                 api_encryption_provisionable: keys.current().is_none(),
+                bluetooth_proxy_feature_flags: proxy_feature_flags(device.bluetooth.proxy_enabled()),
+                bluetooth_mac_address: device.bluetooth.address().unwrap_or_default(),
                 ..Default::default()
             },
         )?,
@@ -286,6 +351,13 @@ fn handle_message(
             }
         }
         SELECT_COMMAND_REQUEST => entities::handle_select(device, data),
+        SWITCH_COMMAND_REQUEST => entities::handle_switch(device, data),
+        SUBSCRIBE_BLUETOOTH_LE_ADVERTISEMENTS_REQUEST => {
+            if device.bluetooth.proxy_enabled() && subscriptions.advertisements.is_none() {
+                subscriptions.advertisements = Some(device.bluetooth.subscribe());
+            }
+        }
+        UNSUBSCRIBE_BLUETOOTH_LE_ADVERTISEMENTS_REQUEST => subscriptions.advertisements = None,
         BUTTON_COMMAND_REQUEST => entities::handle_button(device, data),
         EXECUTE_SERVICE_REQUEST => entities::handle_service(device, data),
         TEXT_COMMAND_REQUEST => {
@@ -311,4 +383,26 @@ fn handle_message(
         _ => {}
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bluetooth::Advertisement;
+
+    #[test]
+    fn batches_advertisements_by_sixteen() {
+        let advertisement = Advertisement { address: 0x1122_3344_5566, address_type: 1, rssi: -60, data: vec![0x02, 0x01, 0x06] };
+        let batches = raw_advertisements(vec![advertisement; 17]);
+        assert_eq!(batches.iter().map(|batch| batch.advertisements.len()).collect::<Vec<_>>(), vec![16, 1]);
+        assert_eq!(batches[0].advertisements[0].address, 0x1122_3344_5566);
+        assert_eq!(batches[0].advertisements[0].address_type, 1);
+        assert!(raw_advertisements(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn reports_proxy_features_only_when_enabled() {
+        assert_eq!(proxy_feature_flags(false), 0);
+        assert_eq!(proxy_feature_flags(true), 0b10_0001);
+    }
 }
