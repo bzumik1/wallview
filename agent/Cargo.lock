@@ -1406,6 +1406,7 @@ version = "0.4.0"
 dependencies = [
  "base64",
  "bluer",
+ "futures",
  "libc",
  "mdns-sd",
  "pbkdf2",
