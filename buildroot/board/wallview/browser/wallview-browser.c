@@ -2,7 +2,6 @@
 #include <wpe/webkit.h>
 #include <wpe/wpe-platform.h>
 
-#define EXTENSIONS_DIRECTORY "/usr/lib/wallview/web-extensions"
 #define RELOAD_DELAY_SECONDS 2
 
 typedef struct {
@@ -78,7 +77,6 @@ main(int argc, char **argv)
     browser.uri = argv[1];
     browser.loop = g_main_loop_new(NULL, FALSE);
     context = webkit_web_context_new();
-    webkit_web_context_set_web_process_extensions_directory(context, EXTENSIONS_DIRECTORY);
     session = create_network_session();
     settings = create_settings();
 

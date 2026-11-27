@@ -34,13 +34,6 @@ else
 fi
 
 CROSS=$(sed -n 's/^BR2_TOOLCHAIN_EXTERNAL_PREFIX="\(.*\)"$/\1/p' "$BR2_CONFIG")
-EXTENSIONS="$TARGET/usr/lib/wallview/web-extensions"
-mkdir -p "$EXTENSIONS"
-"$HOST_DIR/bin/$CROSS-gcc" -shared -fPIC -O2 -s -Wall -Wextra -Werror \
-	-o "$EXTENSIONS/libwallview-kiosk.so" \
-	"$BR2_EXTERNAL_WALLVIEW_PATH/board/wallview/kiosk-extension/wallview-kiosk.c" \
-	$("$HOST_DIR/bin/pkg-config" --cflags --libs wpe-web-process-extension-2.0)
-
 if "$HOST_DIR/bin/pkg-config" --exists wpe-platform-2.0; then
 	"$HOST_DIR/bin/$CROSS-gcc" -O2 -s -Wall -Wextra -Werror \
 		-o "$TARGET/usr/bin/wallview-browser" \
