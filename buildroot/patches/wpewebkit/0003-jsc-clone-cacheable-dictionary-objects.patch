@@ -1,0 +1,86 @@
+From: WallView
+Subject: [PATCH] JSC: clone cacheable dictionary objects in objectCloneFast
+
+Object.assign({}, source) took the generic put path for every property
+when the source has a dictionary Structure (more than 64 properties, e.g.
+Home Assistant's object of 1888 entity states, copied for every state
+update). Clone cacheable dictionaries directly: copy the storage and give
+the target its own cacheable dictionary Structure. Objects with indexed,
+read-only, accessor, non-enumerable or non-configurable properties,
+uncacheable dictionaries and different prototypes keep the old path.
+
+On the panel: Object.assign({}, 1888-property object) 2.15 ms -> 0.59 ms;
+a differential test of 3888 cases (deletes, symbols, getters, indexed
+and read-only properties, other prototypes, non-extensible objects) gave
+identical results with JIT, without JIT, with continuous GC and with
+early optimisation.
+
+Upstream-Status: Pending
+---
+--- a/Source/JavaScriptCore/runtime/ObjectConstructorInlines.h
++++ b/Source/JavaScriptCore/runtime/ObjectConstructorInlines.h
+@@ -138,6 +138,33 @@
+ }
+ 
+ 
++ALWAYS_INLINE bool canCloneCacheableDictionary(Structure* structure)
++{
++    if (structure->typeInfo().type() != FinalObjectType)
++        return false;
++    if (structure->isUncacheableDictionary())
++        return false;
++    if (hasIndexedProperties(structure->indexingType()))
++        return false;
++    if (structure->mayBePrototype())
++        return false;
++    if (structure->didPreventExtensions())
++        return false;
++    if (structure->isBrandedStructure())
++        return false;
++    if (structure->hasPolyProto())
++        return false;
++    if (structure->hasReadOnlyOrGetterSetterPropertiesExcludingProto())
++        return false;
++    if (structure->hasNonEnumerableProperties())
++        return false;
++    if (structure->hasNonConfigurableProperties())
++        return false;
++    if (!structure->isQuickPropertyAccessAllowedForEnumeration())
++        return false;
++    return true;
++}
++
+ ALWAYS_INLINE bool objectCloneFast(VM& vm, JSFinalObject* target, JSObject* source)
+ {
+     static constexpr bool verbose = false;
+@@ -180,6 +207,30 @@
+         }
+     }
+ 
++    if (sourceStructure->isDictionary()) {
++        if (!canCloneCacheableDictionary(sourceStructure))
++            return false;
++        if (targetStructure->inlineCapacity() != sourceStructure->inlineCapacity())
++            return false;
++        if (targetStructure->globalObject() != sourceStructure->globalObject())
++            return false;
++        if (targetStructure->storedPrototype() != sourceStructure->storedPrototype())
++            return false;
++
++        Structure* clonedStructure = Structure::toCacheableDictionaryTransition(vm, sourceStructure);
++        unsigned dictionaryPropertyCapacity = clonedStructure->outOfLineCapacity();
++        if (dictionaryPropertyCapacity) {
++            Butterfly* newButterfly = Butterfly::createUninitialized(vm, target, 0, dictionaryPropertyCapacity, /* hasIndexingHeader */ false, 0);
++            memcpy(newButterfly->propertyStorage() - dictionaryPropertyCapacity, source->butterfly()->propertyStorage() - dictionaryPropertyCapacity, dictionaryPropertyCapacity * sizeof(EncodedJSValue));
++            gcSafeMemcpy(target->inlineStorage(), source->inlineStorage(), sourceStructure->inlineCapacity() * sizeof(EncodedJSValue));
++            target->nukeStructureAndSetButterfly(vm, targetStructure->id(), newButterfly);
++        } else
++            gcSafeMemcpy(target->inlineStorage(), source->inlineStorage(), sourceStructure->inlineCapacity() * sizeof(EncodedJSValue));
++        target->setStructure(vm, clonedStructure);
++        vm.writeBarrier(target);
++        return true;
++    }
++
+     if (!checkStrucureForClone(sourceStructure))
+         return false;
+ 

@@ -7,3 +7,7 @@ WPEWEBKIT_CONF_OPTS += \
 	-DENABLE_WPE_PLATFORM_WAYLAND=OFF
 
 $(WPEWEBKIT_TARGET_CONFIGURE): | libinput eudev libxkbcommon libdrm mesa3d
+
+WPEWEBKIT_CONF_OPTS += \
+	-DCMAKE_C_FLAGS="$(TARGET_CFLAGS) -mno-outline-atomics" \
+	-DCMAKE_CXX_FLAGS="$(TARGET_CXXFLAGS) -mno-outline-atomics"

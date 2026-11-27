@@ -1,0 +1,36 @@
+From: WallView
+Subject: [PATCH] EventHandler: no hit test for captured touch moves on WPE
+
+Every touch move did a full hit test to find the pointer event target,
+although touch pointers are implicitly captured at pointerdown
+(PointerCaptureController::setPointerCapture), so the captured element is
+the target anyway. On the NSPanel this hit test was about 20 % of the
+main thread during a drag on a Home Assistant dashboard. Use the
+capturing element when there is one and hit-test only after the capture
+was released.
+
+Upstream-Status: Pending
+---
+--- a/Source/WebCore/page/EventHandler.cpp	2026-11-27 02:14:03.454943321 +0100
++++ b/Source/WebCore/page/EventHandler.cpp	2026-11-27 02:14:58.208193843 +0100
+@@ -5258,8 +5258,18 @@
+             // No hittest is performed on move or stationary, since the target is not allowed to change anyway.
+             touchTarget = m_originatingTouchPointTargets.get(touchPointTargetKey);
+ 
+-            HitTestResult result = hitTestResultAtPoint(pagePoint, hitType | HitTestRequest::Type::AllowChildFrameContent);
+-            pointerTarget = result.targetElement();
++#if PLATFORM(WPE)
++            RefPtr<Element> capturingElement;
++            if (RefPtr page = frame->page())
++                capturingElement = page->pointerCaptureController().pointerCaptureElement(frame->document(), mousePointerID + 1 + point.id());
++            if (capturingElement)
++                pointerTarget = WTFMove(capturingElement);
++            else
++#endif
++            {
++                HitTestResult result = hitTestResultAtPoint(pagePoint, hitType | HitTestRequest::Type::AllowChildFrameContent);
++                pointerTarget = result.targetElement();
++            }
+         }
+ 
+         RefPtr touchTargetNode = dynamicDowncast<Node>(touchTarget);
