@@ -55,16 +55,26 @@ release(void)
 }
 
 static void
+mark(const char *what)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    fprintf(stderr, "%s %ld.%06ld\n", what, (long)ts.tv_sec, ts.tv_nsec / 1000);
+}
+
+static void
 swipe(int x, int y0, int y1, int duration_ms)
 {
     int steps = duration_ms / 8;
 
+    mark("down");
     contact(x, y0, 1);
     for (int i = 1; i <= steps; i++) {
         sleep_ms(8);
         contact(x, y0 + (y1 - y0) * i / steps, 0);
     }
     release();
+    mark("up");
 }
 
 int
@@ -94,6 +104,7 @@ main(int argc, char **argv)
 
     for (int i = 0; i < repeat; i++) {
         if (!strcmp(mode, "tap")) {
+            mark("down");
             contact(240, 240, 1);
             sleep_ms(60);
             release();

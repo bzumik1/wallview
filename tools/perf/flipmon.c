@@ -50,6 +50,8 @@ main(int argc, char **argv)
             return 1;
         p = drmModeGetPlane(fd, plane);
         if (p && p->fb_id != last_fb) {
+            if (getenv("FLIPMON_TIMES"))
+                fprintf(stderr, "flip %ld.%06ld\n", (long)vbl.reply.tval_sec, (long)vbl.reply.tval_usec);
             if (last_fb) {
                 flips++;
                 gaps[idle_run < 7 ? idle_run : 7]++;
