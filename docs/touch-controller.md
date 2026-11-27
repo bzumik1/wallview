@@ -196,7 +196,7 @@ Measured (`docs/performance.md`): new coordinates every 13–20 ms with gaps to 
 
 What the firmware shows:
 
-- No timer in the flash code sets a frame period. The loop waits for a tick only at the end of a frame, and intervals are not multiples of anything, so the loop is free-running and the period is scan time plus processing. The irregular long gaps fit the noise logic in `0x068a`/`0x09fc` (counters at `0x20000002`, `0x20000005`, threshold `0x20000008` switching between 1000 and 6000, a ROM delay call with argument 5000 when a noise condition is met) and whatever re-scanning the ROM does.
+- No timer in the flash code sets a frame period. The loop waits for a tick only at the end of a frame, and intervals are not multiples of anything, so the loop is free-running and the period is scan time plus processing. The noise logic in `0x068a` (a ROM delay call with argument 5000 when a noise condition is met) was first suspected for the irregular long gaps; the detailed reading in "Noise logic and the cost of a touched frame" below shows it costs too little and too rarely, and that `0x20000008` is a statistic, not a threshold.
 - The scan itself is ROM code driven by the configuration table. The flash code copies these fields into the analog front-end registers at `0x40001080` (function `0x0180`):
 
 | Config offset (file offset) | Value | Goes to |
@@ -239,7 +239,7 @@ Every change made the controller slower. `cfg[0xb4]` slows it in both directions
 | one finger resting | about 38 (26 ms) | about 38 |
 | slow circles | 48–53 | 42–44 |
 
-The scan without a finger is fast. A frame with a finger takes about twice as long, and the controller reports on almost every touched frame. The report rate is therefore limited by the work done in touched frames, not by the scan length that the front-end fields set. Candidates: the noise path in `0x068a`/`0x09fc` (a finger couples mains noise into the sensor) and the coordinate processing in ROM.
+The scan without a finger is fast. A frame with a finger takes about twice as long, and the controller reports on almost every touched frame. The report rate is therefore limited by the work done in touched frames, not by the scan length that the front-end fields set. The flash noise logic does not explain it (next section); the extra time lies in ROM work of frames that report, or in the host's I²C read overlapping the next scan.
 
 ### False lift-offs
 
@@ -258,6 +258,84 @@ Static reading of `cst2xx_ts_worker` and the rest of the vendor driver in the An
 - `0xD000–0xD050` read an 81-byte RAM buffer in any mode; other `0xD0xx` addresses return `0xA5`. A 13 × 8 node map (208 bytes) does not fit, so the flash code cannot return raw or difference data. What `0xD101`, `0xD102` and the other `0xD1xx` commands do is in ROM.
 - `0xD1F0–0xD213` and `0xD220–0xD240` are served from the flash trailer in any mode; no info-mode command is needed to read them.
 - Data bytes written after `0xD0xx` go to RAM (how `0xD000 0xAB` acknowledges), after `0xD1xx` to RAM byte `0x200000E1`, but after `0xD1F0` or `0xD220` to a flash address. Never write data to those two.
+
+### Noise logic and the cost of a touched frame (static analysis, 2026-11-28)
+
+Static reading of the vendor image `0x03000001` (checksum `0x99630e41`), Thumb disassembly checked against the binary. ROM code is not available, so whatever happens inside ROM calls is inferred from timing only. Confidence: **high** = read directly from the code, **medium** = code plus a plausible interpretation, **low** = guess.
+
+#### Where the time goes in a frame
+
+Order inside one main loop iteration (`0x02d8`): ROM `0xdfb8`, frame counter `0x2000000c` += 1 (`0x2f2`, read at `0xD040`), ROM `0xdfb0`, ROM `0xdfa8`, `0x025c`, (ROM `0xdfa0` only if `cfg[0x21]` ≠ 0; vendor 0), ROM `0xdf98`, ROM `0xdf90`, `0x04f2`, ROM `0xdf88`, `0x068a`, **INT high** (`0x368`), `0x09fc`, ROM `0xdf80`, `0xdf68`, `0xdf60` (argument: the address of `0x068a`), `0xdf58`, `0x12e0`, `0x096c`, `0x0568` report (**INT low**), `0x0470` wait. (high)
+
+So the INT line splits a frame in two: INT high → INT low covers the processing and the report, INT low → INT high covers the wait, the next scan and the noise statistics.
+
+Measured in `tools/perf/captures/touch-counter-finger-2026-11-27.txt`: INT high → low median 0.69 ms (p10 0.54, p90 0.92), INT low → high median 18.8 ms (p10 13.4, p90 35). A linear fit over the 200 ms counter windows while circling gives about 20.5 ms for a frame that ends in a report and 13.5 ms for a frame without one (idle frames: 12 ms). The extra time therefore sits between INT low and INT high (wait, ROM scan `0xdfb8…0xdf88`, `0x025c`, `0x04f2`, `0x068a`), and it goes with frames that report, not with the finger as such. (fit: medium)
+
+The flash code in that window is a few hundred µs at most (104-node loops of about 10–30 cycles per node) and does not depend on a touch, except for the optional delay in `0x068a` below. **The 10–14 ms extra are spent in ROM calls or in the host's I²C read overlapping the next scan, not in the flash noise logic.** (medium-high)
+
+#### Code that runs only with a touch
+
+- `0x0568`, report path (`0x05f8`), taken when ROM state says a point is present (`0x20000a23` ≠ 0, or `0x20000a66` ≥ `cfg[0x28]` and bit 7 of `0x20000a60`) and the gesture flag `0x20000a71` is 0. It marks `0x20000064` = `0x55` (a report was sent, so a release report follows later), then (high):
+  - while the palm hold-off `0x20000002` is non-zero: no report at all, except at the values 59 and 1, where it writes an empty report (`0xD000` = `0xAB`, bytes 1–5 = 0, `0xD006` = `0xAB`, point count 0) and pulses INT low with ROM `0xd516(100)`;
+  - otherwise it waits for the host's acknowledge of the previous report (`0x20000010`, i.e. `0xD000`, reads `0xAB`) in a loop of at most 37500 passes (`0x064c`, constant in the literal pool at `0x0888`), then ROM `0xdf40` builds the report and INT goes low.
+- The acknowledge wait is about 10 cycles per pass on a Cortex-M0, so at most about 375 000 cycles: 18.8 ms at 20 MHz, 15.6 ms at 24 MHz, 11.7 ms at 32 MHz. It lies between INT high and INT low, which is measured at 0.7 ms, so with `touchprobe` (acknowledge about 3.8 ms after INT low) and the driver it does not run. Without an acknowledge it would cost the whole timeout on every touched frame. (code: high; cycle count: medium, depends on flash wait states)
+- `0x05b0`/`0x05c4`, no-point path: if `0x20000065` = `0x55`, or `0x20000064` = `0x55` and `0x20000a1d` = 6, it writes a release report (`0xD000` = 0, point count 0, `0xD006` = `0xAB`) and pulls INT low. Otherwise there is no report and no INT (the idle case). (high)
+
+ROM delay `0xd516` is called with 100 (palm empty-report INT pulse), 40 (INT pulse in `0x09fc`) and 5000 (noise case below). Its unit is not visible. INT pulse widths of 40 and 100 and the watchdog counter being cleared right before the 5000 call fit microseconds, so 5000 is probably 5 ms (medium-low). If it were a plain busy loop counting cycles or loop passes it would be 0.2–1 ms at 20–32 MHz; milliseconds (5 s) do not fit any measurement.
+
+#### Noise statistics
+
+`0x025c` (every frame): for each of the 13 rows, the spread (max − min) of `8 × 0x20000884[row] − 0x200007d0[row][k]` over its 8 nodes; `0x20000001` = sum over rows of (row spread − smallest row spread). What the two arrays hold is not known (ROM fills them). This byte selects the noisy branch below. (code: high; meaning: low)
+
+`0x04f2` (every frame after frame 10): looks at the byte map `0x2000044c` (13 × 8). If any node is 255 or any row maximum lies in 11…59, and the palm hold-off is 0, `0x20000005` += 1 (stops at 100); if no such node, `0x20000005` = 0. So `0x20000005` counts consecutive frames with a moderately raised second map. (code: high; meaning of the map: low)
+
+`0x068a` (every frame, and its address is passed to ROM `0xdf60`, which may call it again): over the signed 16-bit difference map at `0x20000668` (13 × 8):
+
+- `neg` = sum of nodes below −40, `pos` = sum of nodes above 40, `n30` = number of nodes above 30. Positive is touch. (high)
+- Noisy branch (`0x20000001` > 25): if `neg` < −500 and |`neg`| > `pos`: set bit 0 of `0x20000ab0` (re-baseline request, see below), clear the watchdog counter `0x40000204`, **ROM `0xd516(5000)`**, `0x20000008` = 6000, return early (no row correction this frame). Else if `neg` < −200 and |`neg`| > `0x20000008`: `0x20000008` = |`neg`|. (high)
+- Quiet branch (`0x20000001` ≤ 25): if |`neg`| > `pos` and `neg` < −400: `0x20000008` = 6000; else the same peak update as above. No delay, no re-baseline. (high)
+- Drift: if `0x20000005` > 20, palm hold-off 0, `0x20000003` = 0 and `pos` < 600: re-baseline request, `0x20000008` = 6000, `0x20000005` = 0, return early. (high)
+- Palm hold-off `0x20000002`: set to 60 when `n30` > 30 (more than 30 of 104 nodes above 30), the chip is not in its low-power wait (bit 3 of `0x20000ab0`), more than 100 frames since start and the hold-off is below 10; re-armed to 60 when `n30` > 10 while it is 1…9; decremented by one per call. One finger covers far fewer than 30 nodes, so this is palm or large-object rejection. Effect in `0x0568`: an empty report on the first frame, about 58 frames without any report, another empty report at the end. (code: high; "palm": medium)
+- Row common-mode correction (every frame unless returned early): for each row, `avg` = row sum / 8. If `avg` > 0: nodes ≥ `avg` and below 60 lose `avg/2` (all of `avg` if `0x20000003` ≠ 0, which the flash code never sets), nodes ≥ 60 stay, positive nodes below `avg` become 1. If `avg` ≤ 0: nodes ≤ `avg` lose `avg`, negative nodes above `avg` become −1. Any row with a node above 60 clears `0x20000a1d`. (high)
+
+`0x20000008` is initialised to 1000 (`0x0218`) and only ever written: peak |`neg`|, or 6000 as an event mark. No flash code compares anything against it to make a decision; it is copied to `0x200008a6` in a statistics block at `0x20000890` that is outside the 81-byte I²C buffer. It is a dead statistic for the host, and the ROM is not given its address. (flash: high; ROM not using it: medium)
+
+`0x20000001`–`0x20000008` lie below the I²C buffer (`0x20000010` = `0xD000`), so the host can neither read nor write them. (high)
+
+Re-baseline request: bit 0 of `0x20000ab0` is also set at main loop entry. After ROM `0xdfb0`, if the bit is still set, the loop sets `0x20000065` = `0x55`, which makes the next no-point frame send a release report. Since idle frames send nothing, the ROM must clear the bit after acting on it. (medium)
+
+`0x09fc`: a proximity-like state (counts nodes ≥ 10 among the first 34 of the map, 26 if `cfg[0x07]` ≠ 0, 20-frame hold, INT pulse with `0xd516(40)` on change). It returns at once unless `0xD04B` (`0x2000005b`) is non-zero; the init clears it and no driver writes it. Off in normal use. (high)
+
+#### Noise path and the false lift-offs
+
+Both reports the flash code writes by itself, the release in `0x05c4` and the palm empty report, have point count 0. The false lift-offs in the captures are point count 1 with status 0 (12 of 1818 reads in the finger capture, plus 3 with count 0), and that report is built by ROM `0xdf40`: the ROM's own tracking dropped the point for one frame. So the noise path does not write the false lifts directly. (high for the byte values, medium for the conclusion)
+
+It can contribute indirectly through the row correction: nodes between the row average and 60 lose half the average every frame. A light or fast-moving finger whose peak is below 60 loses about a quarter of its peak (for example peak 58, row average 22 → 47), which can push it under the ROM's touch threshold for one frame. This fits lifts that happen mid-drag and never at rest with a firm finger, but the ROM threshold is unknown. (low-medium)
+
+#### Configuration bytes
+
+None of the noise thresholds or delays come from the configuration table. ±40, 30, −200, −400, −500, 25, 20, 600, 60, 10, 100, 1000 are instruction immediates; 5000 (`0x08a0`), 6000 (`0x08a4`) and 37500 (`0x0888`) are code literal-pool words. (high)
+
+Configuration bytes read on these paths (file offset = `0x1604` + offset):
+
+| Byte | File offset | Vendor value | Use |
+|---|---|---|---|
+| `cfg[0x07]` | `0x160b` | 0 | `0x09fc` node count (34, or 26 when non-zero) |
+| `cfg[0x0b]` | `0x160f` | 6 | `0x096c` loop count (gesture path) |
+| `cfg[0x21]` | `0x1625` | 0 | bit field: low part enables ROM `0xdfa0`; high nibble ≠ 0 makes frames whose `0x20000a1e` ≠ `cfg[0x6b]` skip processing and only report |
+| `cfg[0x26]` | `0x162a` | 2 | INT GPIO bit |
+| `cfg[0x28]` | `0x162c` | 6 | report gate in `0x0568`, compared with `0x20000a66` |
+| `cfg[0x6a]` | `0x166e` | 12 | copied to `0x20000a1e` in the gesture path |
+| `cfg[0x6b]` | `0x166f` | 9 | compared with `0x20000a1e` (only when `cfg[0x21]` high nibble ≠ 0) |
+
+#### Experiments
+
+No configuration byte changes the noise path, and nothing in it explains the 10–14 ms, so the next steps measure instead of flash. Both use existing `touchprobe` options under the panel lock, with no firmware change:
+
+1. No finger, `touchprobe ... poll12 ack counter200`, 20 s: the host reads `0xD000` and acknowledges every 12 ms although nothing is touched. If the frame rate stays at 83/s, the extra time is ROM work in reporting frames. If it drops toward 40–50/s, the host's 3.7 ms I²C read slows down the scan (for example a scan that is restarted or extended when the I²C slave interrupt fires). In that case the next step is host-side: `clock-frequency = <400000>` on `&i2c1` (the touch controller is its only device) and/or reading 7 bytes per single-point frame instead of 28.
+2. Finger resting, `touchprobe ... level noack counter200`: the acknowledge wait at `0x064c` should then run to its timeout in every touched frame. Expected: INT high → low grows from 0.7 ms to 375 000 cycles / f_CPU (12–19 ms) and frames/s drop from about 38 to about 23. The increase gives the CPU clock, which also fixes the unit of `0xd516`. If INT high → low stays short, the ROM report builder or the I²C handler acknowledges by itself and the reading of `0x064c` is wrong.
+
+A code patch would be needed to change the row correction (`cmp r1, #60` at `0x08ac`, and the −40/40 limits at `0x069c`/`0x06b8`). Do not try it before experiment 1, and only through the review rule for risky changes: weaker noise suppression gives jitter and ghost touches near mains wiring, which a short bench test does not show.
 
 ### Sister-chip documents
 
