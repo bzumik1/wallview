@@ -5,6 +5,11 @@
 //! coordinator: the factory EZSP firmware is shared over TCP (port 6638, like ser2net) and
 //! advertised as `_zigbee-coordinator._tcp`, so ZHA offers it automatically and Zigbee2MQTT can
 //! use `tcp://<panel>:6638`. Router and Thread modes need other firmware and come later.
+//!
+//! The bridge serves one Zigbee host at a time and refuses others while it is connected, so a
+//! port scan or a second host cannot cut off the running one (a host that takes over with a
+//! different network configuration would make the radio leave the Zigbee network). Dead hosts
+//! are detected with TCP keepalive. Option labels are wire values: only ever append new ones.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -14,7 +19,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 
@@ -26,6 +31,12 @@ pub const BRIDGE_PORT: u16 = 6638;
 const SERVICE_TYPE: &str = "_zigbee-coordinator._tcp.local.";
 const IDLE: Duration = Duration::from_millis(500);
 const BUFFER: usize = 1024;
+const RETRY_FIRST: Duration = Duration::from_secs(5);
+const RETRY_MAX: Duration = Duration::from_secs(60);
+const KEEPALIVE_IDLE_S: i32 = 10;
+const KEEPALIVE_INTERVAL_S: i32 = 5;
+const KEEPALIVE_COUNT: i32 = 3;
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
@@ -79,19 +90,24 @@ impl Radio {
         *self.mode.lock().unwrap()
     }
 
+    /// Stores the mode (temporary file + rename) and applies it only if that worked, so the
+    /// panel never runs a mode it would forget on the next boot.
     pub fn set_mode(&self, mode: Mode) {
-        let mut current = self.mode.lock().unwrap();
-        if *current == mode {
+        if self.mode() == mode {
             return;
         }
-        if let Err(error) = fs::write(MODE_FILE, format!("{}\n", mode.id())) {
-            eprintln!("wallview-agent: radio: cannot store mode: {error}");
+        let temporary = format!("{MODE_FILE}.new");
+        let stored = fs::write(&temporary, format!("{}\n", mode.id())).and_then(|_| fs::rename(&temporary, MODE_FILE));
+        if let Err(error) = stored {
+            eprintln!("wallview-agent: radio: cannot store mode, keeping {}: {error}", self.mode().label());
+            self.changes.fetch_add(1, Ordering::SeqCst);
+            return;
         }
-        *current = mode;
+        *self.mode.lock().unwrap() = mode;
         self.changes.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// True while a Zigbee host (ZHA, Zigbee2MQTT) is connected to the bridge.
+    /// True while a host (ZHA, Zigbee2MQTT) is connected to the radio.
     pub fn client_connected(&self) -> bool {
         self.client.load(Ordering::SeqCst)
     }
@@ -108,17 +124,36 @@ impl Radio {
     }
 }
 
-/// Runs the radio for the lifetime of the agent, following the selected mode.
+/// Runs the radio for the lifetime of the agent, following the selected mode. A failing start
+/// (UART missing or busy, port taken) is retried with a growing delay and logged once.
 pub fn run(radio: Radio, node_name: String, friendly_name: String, serial_number: String) {
+    let mut retry = RETRY_FIRST;
+    let mut last_error = String::new();
     loop {
         match radio.mode() {
-            Mode::Off => thread::sleep(IDLE),
-            Mode::ZigbeeCoordinator => {
-                if let Err(error) = bridge(&radio, &node_name, &friendly_name, &serial_number) {
-                    eprintln!("wallview-agent: radio: {error}");
-                    thread::sleep(Duration::from_secs(5));
-                }
+            Mode::Off => {
+                retry = RETRY_FIRST;
+                last_error.clear();
+                thread::sleep(IDLE);
             }
+            Mode::ZigbeeCoordinator => match bridge(&radio, &node_name, &friendly_name, &serial_number) {
+                Ok(()) => {
+                    retry = RETRY_FIRST;
+                    last_error.clear();
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    if message != last_error {
+                        eprintln!("wallview-agent: radio: {message} (retrying)");
+                        last_error = message;
+                    }
+                    let deadline = Instant::now() + retry;
+                    while Instant::now() < deadline && radio.mode() == Mode::ZigbeeCoordinator {
+                        thread::sleep(IDLE);
+                    }
+                    retry = (retry * 2).min(RETRY_MAX);
+                }
+            },
         }
     }
 }
@@ -149,57 +184,105 @@ impl Drop for Advertisement {
     }
 }
 
-/// Opens the UART raw at 115200 8N1 without flow control. Reads return after 0.2 s without data,
-/// so the copy loops can notice a mode change. The EZSP firmware uses XON/XOFF, which ASH
-/// escapes inside frames; the bytes are passed through untouched and the host ignores them.
+fn check(result: libc::c_int) -> io::Result<()> {
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Opens the UART exclusively (`TIOCEXCL`, so nothing else can open it while the bridge runs)
+/// and raw at 115200 8N1 without hardware flow control. The factory EZSP firmware uses
+/// XON/XOFF: `IXON` lets the kernel pause sending when the radio asks for it (ASH escapes 0x11
+/// and 0x13 inside frames, so only real flow-control bytes are consumed). Reads return after
+/// 0.2 s without data, so the copy loops can notice a mode change.
 fn open_serial() -> io::Result<File> {
-    let file = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NOCTTY).open(std::env::var(SERIAL_ENV).unwrap_or_else(|_| SERIAL.to_string()))?;
+    let path = std::env::var(SERIAL_ENV).unwrap_or_else(|_| SERIAL.to_string());
+    let file = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK).open(&path)?;
     let fd = file.as_raw_fd();
     unsafe {
+        check(libc::ioctl(fd, libc::TIOCEXCL))?;
         let mut termios: libc::termios = std::mem::zeroed();
-        if libc::tcgetattr(fd, &mut termios) != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        check(libc::tcgetattr(fd, &mut termios))?;
         libc::cfmakeraw(&mut termios);
         termios.c_cflag &= !(libc::CRTSCTS | libc::CSTOPB | libc::PARENB);
         termios.c_cflag |= libc::CLOCAL | libc::CREAD;
-        termios.c_iflag &= !(libc::IXON | libc::IXOFF | libc::IXANY);
+        termios.c_iflag &= !(libc::IXOFF | libc::IXANY);
+        termios.c_iflag |= libc::IXON;
         termios.c_cc[libc::VMIN] = 0;
         termios.c_cc[libc::VTIME] = 2;
-        libc::cfsetispeed(&mut termios, libc::B115200);
-        libc::cfsetospeed(&mut termios, libc::B115200);
-        if libc::tcsetattr(fd, libc::TCSANOW, &termios) != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        libc::tcflush(fd, libc::TCIOFLUSH);
+        check(libc::cfsetispeed(&mut termios, libc::B115200))?;
+        check(libc::cfsetospeed(&mut termios, libc::B115200))?;
+        check(libc::tcsetattr(fd, libc::TCSANOW, &termios))?;
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        check(flags)?;
+        check(libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK))?;
     }
     Ok(file)
 }
 
-/// Serves the UART to one TCP client at a time while the mode is Zigbee coordinator. A new
-/// client replaces the old one, so a restarted Home Assistant does not find the port busy.
+/// Discards bytes the radio sent while no host was connected and resumes output in case an
+/// XOFF from an earlier session was never followed by XON.
+fn reset_serial(serial: &File) {
+    unsafe {
+        libc::tcflush(serial.as_raw_fd(), libc::TCIFLUSH);
+        libc::tcflow(serial.as_raw_fd(), libc::TCOON);
+    }
+}
+
+fn set_keepalive(stream: &TcpStream) -> io::Result<()> {
+    let fd = stream.as_raw_fd();
+    let set = |level, name, value: libc::c_int| unsafe {
+        check(libc::setsockopt(
+            fd,
+            level,
+            name,
+            &value as *const libc::c_int as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        ))
+    };
+    set(libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1)?;
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, KEEPALIVE_IDLE_S)?;
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, KEEPALIVE_INTERVAL_S)?;
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, KEEPALIVE_COUNT)
+}
+
+/// Serves the UART to one TCP host at a time while the mode is Zigbee coordinator. Errors of a
+/// single connection are logged and do not stop the bridge.
 fn bridge(radio: &Radio, node_name: &str, friendly_name: &str, serial_number: &str) -> io::Result<()> {
-    let serial = open_serial()?;
     let listener = TcpListener::bind(("0.0.0.0", BRIDGE_PORT))?;
     listener.set_nonblocking(true)?;
+    let serial = open_serial()?;
     let _advertisement = Advertisement::start(node_name, friendly_name, serial_number);
+    eprintln!("wallview-agent: radio: Zigbee bridge on port {BRIDGE_PORT}");
     let mut session: Option<Session> = None;
 
     while radio.mode() == Mode::ZigbeeCoordinator {
-        match listener.accept() {
-            Ok((stream, peer)) => {
-                eprintln!("wallview-agent: radio: Zigbee host {peer} connected");
-                if let Some(old) = session.take() {
-                    old.stop();
-                }
-                session = Some(Session::start(stream, &serial, radio.clone())?);
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(IDLE),
-            Err(error) => return Err(error),
-        }
         if session.as_ref().is_some_and(Session::finished) {
             session.take().unwrap().stop();
             eprintln!("wallview-agent: radio: Zigbee host disconnected");
+        }
+        match listener.accept() {
+            Ok((stream, peer)) => {
+                if session.is_some() {
+                    eprintln!("wallview-agent: radio: refused {peer}, another Zigbee host is connected");
+                    let _ = stream.shutdown(Shutdown::Both);
+                    continue;
+                }
+                match Session::start(stream, &serial, radio.clone()) {
+                    Ok(started) => {
+                        eprintln!("wallview-agent: radio: Zigbee host {peer} connected");
+                        session = Some(started);
+                    }
+                    Err(error) => eprintln!("wallview-agent: radio: {peer}: {error}"),
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(IDLE),
+            Err(error) => {
+                eprintln!("wallview-agent: radio: accept: {error}");
+                thread::sleep(IDLE);
+            }
         }
     }
     if let Some(session) = session {
@@ -217,13 +300,19 @@ struct Session {
 
 impl Session {
     fn start(stream: TcpStream, serial: &File, radio: Radio) -> io::Result<Self> {
-        stream.set_nodelay(true)?;
         stream.set_nonblocking(false)?;
+        stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(Duration::from_millis(200)))?;
+        stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+        set_keepalive(&stream)?;
+        // Every clone before any thread starts, so a failure leaves no worker behind.
+        let mut from_serial = serial.try_clone()?;
+        let mut to_serial = serial.try_clone()?;
+        let mut to_client = stream.try_clone()?;
+        let mut from_client = stream.try_clone()?;
+        reset_serial(serial);
         let stop = Arc::new(AtomicBool::new(false));
 
-        let mut from_serial = serial.try_clone()?;
-        let mut to_client = stream.try_clone()?;
         let uplink_stop = stop.clone();
         let uplink = thread::spawn(move || {
             let mut buffer = [0u8; BUFFER];
@@ -245,8 +334,6 @@ impl Session {
             uplink_stop.store(true, Ordering::SeqCst);
         });
 
-        let mut to_serial = serial.try_clone()?;
-        let mut from_client = stream.try_clone()?;
         let downlink_stop = stop.clone();
         let downlink = thread::spawn(move || {
             let mut buffer = [0u8; BUFFER];

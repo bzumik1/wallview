@@ -304,6 +304,8 @@ fn handle_message(
             send_message(sender, NOISE_ENCRYPTION_SET_KEY_RESPONSE, NoiseEncryptionSetKeyResponse { success })?;
             if success {
                 let mut advertisement = advertisement.lock().unwrap();
+                // Drop the old record first: it has the same name, and dropping it after the
+                // new one is registered would unregister the new one.
                 *advertisement = None;
                 *advertisement = mdns::Advertisement::start(device, true);
             }

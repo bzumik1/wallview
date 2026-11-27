@@ -90,11 +90,11 @@ pub fn list() -> Vec<Encoded> {
     messages.push(encode(
         message_type::LIST_ENTITIES_BINARY_SENSOR,
         ListEntitiesBinarySensorResponse {
-            object_id: "zigbee_host_connected".into(),
+            object_id: "radio_client_connected".into(),
             key: ZIGBEE_CLIENT,
-            name: "Zigbee host connected".into(),
+            name: "Radio client connected".into(),
             device_class: "connectivity".into(),
-            icon: "mdi:zigbee".into(),
+            icon: "mdi:lan-connect".into(),
             entity_category: EntityCategory::Diagnostic as i32,
             ..Default::default()
         },

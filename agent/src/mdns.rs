@@ -12,7 +12,9 @@ pub fn daemon() -> Option<&'static ServiceDaemon> {
             let daemon = ServiceDaemon::new().map_err(|error| eprintln!("wallview-agent: mdns: {error}")).ok()?;
             let _ = daemon.disable_interface(IfKind::Name("usb0".into()));
             // `_zigbee-coordinator` (ZHA) is longer than the RFC 6763 limit of 15 characters.
-            let _ = daemon.set_service_name_len_max(SERVICE_NAME_LEN_MAX);
+            if let Err(error) = daemon.set_service_name_len_max(SERVICE_NAME_LEN_MAX) {
+                eprintln!("wallview-agent: mdns: {error}");
+            }
             Some(daemon)
         })
         .as_ref()

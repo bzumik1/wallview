@@ -458,20 +458,27 @@ Decision (2026-11-27, replaces "Thread RCP only"): the MG21 runs one protocol at
 
 - [x] Find the UART of the MG21: UART5, EZSP NCP at 115200, software flow control
 - [x] Zigbee coordinator: TCP bridge in `wallview-agent` (port 6638), mDNS `_zigbee-coordinator._tcp` for ZHA discovery, Radio mode select
-- [ ] Test the bridge with ZHA and Zigbee2MQTT on the panel; read EZSP and bootloader versions
-- [ ] Find the GPIOs for MG21 reset and bootloader, and whether RTS/CTS (GPIO3_A3/A5) reach the module
-- [ ] SM-044 board manifest for the open-source firmware builder: Zigbee router and OpenThread RCP images, built in CI, no vendor firmware in the repository
-- [ ] Flashing from the agent in Rust (enter the Gecko bootloader from EZSP, Spinel or router firmware, XMODEM upload of the `.gbl`)
-- [ ] `otbr-agent` on the panel for Thread mode, connected to the HA OpenThread Border Router integration
+- [ ] Test the bridge with ZHA and Zigbee2MQTT on the panel; read the EZSP version and the chip marking (MG21A020F512/F768/F1024 decides the firmware build)
+- [ ] Prove the Gecko bootloader without writing anything: EZSP `launchStandaloneBootloader`, bootloader menu on ttyS5, `2` (run) returns to EZSP
+- [ ] Check whether a reboot or a power cycle of the panel resets the MG21
+- [ ] Find the GPIOs for MG21 reset and bootloader entry (the iHost uses the same two-GPIO pattern), prove that bootloader entry by GPIO works, or prove SWD on the module header; check whether RTS/CTS (GPIO3_A3/A5) reach the module
+- [ ] Look in the own Android eMMC backup for ITEAD's MG21 `.gbl` and the GPIO handling of the vendor app (never committed)
+- [ ] SM-044 board manifest (darkxst's fork of the firmware builder has the MG21/Sonoff manifests): open-source EZSP NCP first (the way back to coordinator), then Zigbee router and OpenThread RCP, all forcing no hardware flow control unless RTS/CTS are wired; built in CI, no vendor firmware in the repository
+- [ ] Flashing from the agent in Rust: check the GBL's CRC and tags, never send bootloader GBLs, require a ZHA network backup and no connected host, enter the Gecko bootloader (EZSP, Spinel or router CLI), XMODEM upload; at start, run the app if the radio sits in the bootloader. Switching becomes select + an explicit Apply (or an `update` entity), never a single tap
+- [ ] `otbr-agent` on the panel for Thread mode (own Buildroot package, `OTBR_MDNS=openthread`, REST on 8081 firewalled to Home Assistant, test mDNS next to the agent's responder); HA's OTBR integration has no discovery, so the WallView integration sets the URL
+- [ ] Kernel and system for Thread: TUN, IPv6 forwarding, `accept_ra=2`, route information options, nftables
 - [ ] IPv6 in the system (link-local addresses are enough)
-- [ ] Later: replace the TCP bridge with the ESPHome serial proxy once ZHA can use it
+- [ ] ESPHome serial proxy in the agent (HA core and bellows already support it: Noise-encrypted, follows address changes, ASH acks on the panel); keep the TCP bridge for Zigbee2MQTT
 
 ### Caution
 
 - Do not use multiprotocol (Zigbee + Thread on one chip), Nabu Casa abandoned it in 2024
 - Interference with the panel's Wi-Fi (both 2.4 GHz on one board): Zigbee/Thread channel as far from the Wi-Fi channel as possible (e.g. Wi-Fi 1, channel 25); warn in the settings
 - EZSP over Wi-Fi needs a stable link: the NCP resets when ASH acknowledgements arrive late
-- Do not flash router or RCP firmware before the reset GPIO is known, so a bad image can be recovered without opening the panel
+- A reset line alone does not make a bad flash recoverable: the Gecko bootloader only checks the app's vector table, so a half-written image or one with wrong UART pins boots and never answers. Do not flash anything before bootloader entry by GPIO or SWD is proven
+- The factory firmware cannot be read back without SWD (and maybe not at all if debug lock is set); the way back is an open-source EZSP NCP built for the SM-044 pins
+- Reflashing can lose the Zigbee network on the chip: a ZHA backup before every reflash is required
+- RCP at 460800 without flow control may overrun the PX30 UART FIFO under kiosk load: start at 115200/230400 and watch `oe:` in `/proc/tty/driver/serial`
 
 Estimate: Zigbee coordinator days, router and Thread a few weeks (pins, firmware builds, flasher).
 
