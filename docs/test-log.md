@@ -147,3 +147,7 @@ Agent from the PR #9 image (radio bridge from PR #2, without the Bluetooth proxy
 - Restored: mode file removed (it did not exist before), API key unchanged, same agent PID throughout.
 
 EmberZNet 6.10.1 works with ZHA (bellows supports EZSP 8), but Zigbee2MQTT's `ember` adapter needs EZSP 13 or newer (EmberZNet 7.4+), so Zigbee2MQTT only works with the deprecated `ezsp` adapter until the radio gets newer firmware. Not yet added to a Home Assistant ZHA instance.
+
+### Gecko bootloader entry (no write)
+
+Radio mode Zigbee coordinator, `universal-silabs-flasher` 1.3.0 on the Mac over the TCP bridge, under the panel lock, no reboot. EZSP `launchStandaloneBootloader` (mode 1) returned SUCCESS; the menu at 115200 baud read **Gecko Bootloader v1.12.00** (1. upload gbl, 2. run, 3. ebl info). Only `ebl info` and `run` were sent, never `upload`. The radio answered `run` with XON + RSTACK and EZSP reported EmberZNet 6.10.1.0 build 216 before and after. So the radio can be put into its bootloader from software, without a reset GPIO. Restored: mode Off, mode file removed, same agent PID.
