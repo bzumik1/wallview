@@ -22,6 +22,25 @@ To resume a higher report rate, in this order, each step only with the owner's e
 
 The vendor firmware is not distributed: it stays in the git-ignored `local/firmware/` and `extract/`.
 
+## Tools (`tools/touchfw/`)
+
+Written 2026-11-27 for the 120 Hz goal, not run on hardware yet.
+
+- `cstfw.c`: `info` (step 1, trailer registers in info mode), `boot-check` (step 2: reset, `A0 01 AA`, `0xA003 == 0x55`, reads `0xA000`/`0xA008`, reset; no erase), `flash <image> --erase-and-program` (plan (a)/(b), the vendor sequence from the table below, 5 attempts from page 0). `flash` refuses an image whose size, identification trailer (13×8, 480×480, check code, project `0x4b01`, chip `0xa8`) or checksum is wrong. It refuses to run while the kernel driver is bound.
+- `panel-cstfw.sh root@<panel> info|boot-check|flash <image> --erase-and-program`: builds `cstfw` in the Lima VM, unbinds the driver, runs it, binds the driver again.
+- `cstimg.py show|set`: shows the suspected front-end fields of an image, or writes a copy with changed configuration bytes and a recomputed checksum (version unchanged, offsets limited to the configuration area).
+
+Typical session for plan (b), each step with the owner's approval:
+
+```
+tools/touchfw/panel-cstfw.sh root@PANEL info
+tools/touchfw/panel-cstfw.sh root@PANEL boot-check
+tools/touchfw/panel-cstfw.sh root@PANEL flash local/firmware/hynitron/cst226se-vendor-0x03000001.bin --erase-and-program   # twice
+tools/touchfw/cstimg.py set local/firmware/hynitron/cst226se-vendor-0x03000001.bin local/firmware/hynitron/try-166a-10.bin 0x166a=10
+tools/touchfw/panel-cstfw.sh root@PANEL flash local/firmware/hynitron/try-166a-10.bin --erase-and-program
+# measure with tools/perf/touchprobe, then back to the vendor image if unclear
+```
+
 ## Where the firmware is
 
 The vendor kernel (`extract/boot.img` → uncompressed arm64 `Image`, Linux 4.4.138) has `CONFIG_KALLSYMS_ALL`, so symbols are recoverable:
