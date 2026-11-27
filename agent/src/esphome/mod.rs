@@ -178,6 +178,7 @@ fn handle_client(
     let mut bluetooth_changes = device.bluetooth.changes();
     let proxy_at_connect = device.bluetooth.proxy_enabled();
     let mut last_sensors = Instant::now();
+    let mut last_states = Instant::now();
     loop {
         if keys.generation() != generation {
             sender.close();
@@ -224,9 +225,10 @@ fn handle_client(
                 return Ok(());
             }
         }
-        if !subscriptions.states {
+        if !subscriptions.states || last_states.elapsed() < POLL_INTERVAL {
             continue;
         }
+        last_states = Instant::now();
         if device.radio.changes() != radio_changes {
             radio_changes = device.radio.changes();
             for (message_type, data) in entities::radio_states(device) {

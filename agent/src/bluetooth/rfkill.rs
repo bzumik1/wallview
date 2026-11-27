@@ -22,6 +22,16 @@ fn set_blocked_in(root: &Path, blocked: bool) -> io::Result<usize> {
     Ok(switches.len())
 }
 
+fn all_blocked_in(root: &Path) -> bool {
+    let switches = bluetooth_switches(root);
+    !switches.is_empty()
+        && switches.iter().all(|switch| fs::read_to_string(switch.join("soft")).is_ok_and(|soft| soft.trim() == "1"))
+}
+
+pub fn all_blocked() -> bool {
+    all_blocked_in(Path::new(RFKILL))
+}
+
 pub fn set_blocked(blocked: bool) -> io::Result<usize> {
     set_blocked_in(Path::new(RFKILL), blocked)
 }
@@ -39,11 +49,23 @@ mod tests {
             fs::write(root.join(name).join("type"), format!("{kind}\n")).unwrap();
             fs::write(root.join(name).join("soft"), "0\n").unwrap();
         }
+        assert!(!all_blocked_in(&root));
         assert_eq!(set_blocked_in(&root, true).unwrap(), 1);
+        assert!(all_blocked_in(&root));
         assert_eq!(fs::read_to_string(root.join("rfkill1/soft")).unwrap(), "1");
         assert_eq!(fs::read_to_string(root.join("rfkill0/soft")).unwrap(), "0\n");
         set_blocked_in(&root, false).unwrap();
         assert_eq!(fs::read_to_string(root.join("rfkill1/soft")).unwrap(), "0");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn is_not_blocked_without_a_bluetooth_switch() {
+        let root = std::env::temp_dir().join(format!("wallview-rfkill-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        assert!(!all_blocked_in(&root));
+        assert_eq!(set_blocked_in(&root, true).unwrap(), 0);
         fs::remove_dir_all(&root).unwrap();
     }
 }

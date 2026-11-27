@@ -262,8 +262,14 @@ async fn start_scanner(adapter: &Adapter, last: &mut String) -> bluer::Result<Jo
     }
 }
 
+async fn set_blocked(blocked: bool) -> std::io::Result<usize> {
+    tokio::task::spawn_blocking(move || rfkill::set_blocked(blocked))
+        .await
+        .unwrap_or_else(|error| Err(std::io::Error::other(error)))
+}
+
 async fn power_on(session: &Session) -> bluer::Result<Adapter> {
-    if let Err(error) = rfkill::set_blocked(false) {
+    if let Err(error) = set_blocked(false).await {
         eprintln!("wallview-agent: bluetooth: cannot unblock: {error}");
     }
     let mut last = None;
@@ -280,12 +286,41 @@ async fn power_on(session: &Session) -> bluer::Result<Adapter> {
     Err(last.unwrap_or_else(|| bluer::Error { kind: bluer::ErrorKind::NotReady, message: "no adapter".into() }))
 }
 
-async fn power_off(session: &Session) {
+async fn is_off(session: &Session) -> bool {
+    let unpowered = match session.default_adapter().await {
+        Ok(adapter) => adapter.is_powered().await.is_ok_and(|powered| !powered),
+        Err(_) => true,
+    };
+    let blocked = tokio::task::spawn_blocking(rfkill::all_blocked).await.unwrap_or(false);
+    unpowered && blocked
+}
+
+async fn power_off(session: &Session) -> bool {
     if let Ok(adapter) = session.default_adapter().await {
         let _ = adapter.set_powered(false).await;
     }
-    if let Err(error) = rfkill::set_blocked(true) {
-        eprintln!("wallview-agent: bluetooth: cannot block: {error}");
+    match set_blocked(true).await {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(error) => {
+            eprintln!("wallview-agent: bluetooth: cannot block: {error}");
+            false
+        }
+    }
+}
+
+async fn still_powered(adapter: &Adapter) -> bool {
+    adapter.is_powered().await.unwrap_or(false)
+}
+
+async fn learn_address(bluetooth: &Bluetooth, session: &Session) {
+    if bluetooth.address().is_some() {
+        return;
+    }
+    if let Ok(adapter) = session.default_adapter().await {
+        if let Ok(address) = adapter.address().await {
+            bluetooth.shared.state.lock().unwrap().address = Some(address.to_string());
+        }
     }
 }
 
@@ -306,17 +341,31 @@ async fn manage(bluetooth: Bluetooth) {
     };
     let mut adapter: Option<Adapter> = None;
     let mut scanner: Option<JoinHandle<()>> = None;
-    let mut first = true;
     loop {
         let (want_power, want_scan) = bluetooth.wanted();
-        if !want_power && (adapter.is_some() || first) {
+        learn_address(&bluetooth, &session).await;
+        if !want_power {
             stop(&mut scanner);
             adapter = None;
-            power_off(&session).await;
             bluetooth.set_powered_state(false, None);
-            report(&mut last, "off".into());
+            if !is_off(&session).await {
+                if power_off(&session).await {
+                    report(&mut last, "off".into());
+                } else {
+                    report(&mut last, "cannot switch off yet, no Bluetooth rfkill switch".into());
+                }
+            }
         }
-        first = false;
+        if want_power {
+            if let Some(current) = &adapter {
+                if !still_powered(current).await {
+                    stop(&mut scanner);
+                    adapter = None;
+                    bluetooth.set_powered_state(false, None);
+                    report(&mut last, "adapter lost power, powering on again".into());
+                }
+            }
+        }
         if want_power && adapter.is_none() {
             match power_on(&session).await {
                 Ok(powered) => {
