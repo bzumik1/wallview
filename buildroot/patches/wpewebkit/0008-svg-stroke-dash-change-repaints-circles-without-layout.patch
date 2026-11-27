@@ -18,7 +18,7 @@ strokes, the layer-based SVG engine) still lays out: RenderElement::setStyle
 raises a dash change to a layout unless the renderer is such an ellipse.
 RenderStyle::diff reports a dash change as a repaint, so no caller sees
 two styles that differ in dashes as equal. Only .cpp files and the
-ellipse header (three files include it) change, so a rebuild with the
+ellipse header (four files include it) change, so a rebuild with the
 patch recompiles a handful of WebCore sources.
 
 Upstream-Status: Pending
