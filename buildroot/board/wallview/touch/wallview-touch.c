@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <linux/uinput.h>
+#include <math.h>
 #include <poll.h>
 #include <sched.h>
 #include <stdint.h>
@@ -22,6 +23,7 @@ struct sample {
     int64_t time;
     int x;
     int y;
+    int major;
 };
 
 struct contact {
@@ -44,6 +46,12 @@ struct contact {
     int64_t lift_at;
     int origin_x;
     int origin_y;
+    int moved;
+    double vx;
+    double vy;
+    int blend;
+    double offset_x;
+    double offset_y;
 };
 
 struct options {
@@ -52,10 +60,16 @@ struct options {
     int64_t max_prediction;
     int64_t max_sample_gap;
     int64_t lift_hold;
-    int64_t rejoin_speed;
     int rejoin_min;
+    double rejoin_slack;
     int hold_travel;
+    double hold_speed;
+    double start_speed;
     int64_t hold_recent;
+    int64_t coast;
+    int coast_max;
+    double coast_speed;
+    int debug;
 };
 
 static struct contact contacts[MAX_SLOTS];
@@ -146,7 +160,54 @@ add_sample(struct contact *c, int64_t time)
         memmove(c->history, c->history + 1, (HISTORY - 1) * sizeof(c->history[0]));
         c->samples--;
     }
-    c->history[c->samples++] = (struct sample){ time, c->x, c->y };
+    c->history[c->samples++] = (struct sample){ time, c->x, c->y, c->major };
+    double dx = c->x - c->origin_x;
+    double dy = c->y - c->origin_y;
+
+    if (dx * dx + dy * dy >= (double)opts->hold_travel * opts->hold_travel)
+        c->moved = 1;
+}
+
+static double
+velocity(const struct contact *c, double *vx, double *vy)
+{
+    int n = 1;
+
+    *vx = *vy = 0;
+    while (n < 3 && n < c->samples) {
+        const struct sample *a = &c->history[c->samples - 1 - n];
+        const struct sample *b = &c->history[c->samples - n];
+
+        if (b->time <= a->time || b->time - a->time > opts->max_sample_gap)
+            break;
+        n++;
+    }
+    if (n < 2)
+        return 0;
+
+    const struct sample *s = &c->history[c->samples - n];
+    double mt = 0, mx = 0, my = 0, stt = 0, stx = 0, sty = 0;
+
+    for (int i = 0; i < n; i++) {
+        mt += (double)(s[i].time - s[n - 1].time) / NSEC_PER_SEC;
+        mx += s[i].x;
+        my += s[i].y;
+    }
+    mt /= n;
+    mx /= n;
+    my /= n;
+    for (int i = 0; i < n; i++) {
+        double t = (double)(s[i].time - s[n - 1].time) / NSEC_PER_SEC - mt;
+
+        stt += t * t;
+        stx += t * (s[i].x - mx);
+        sty += t * (s[i].y - my);
+    }
+    if (stt <= 0)
+        return 0;
+    *vx = stx / stt;
+    *vy = sty / stt;
+    return sqrt(*vx * *vx + *vy * *vy);
 }
 
 static int
@@ -161,6 +222,12 @@ clamp(int v, int lo, int hi)
     return v < lo ? lo : v > hi ? hi : v;
 }
 
+static double
+ms(int64_t ns)
+{
+    return (double)ns / NSEC_PER_MSEC;
+}
+
 static void
 release(int slot)
 {
@@ -172,6 +239,8 @@ release(int slot)
     if (last && (!c->predicted || c->fresh))
         emit_position(slot, clamp(last->x, min_x, max_x), clamp(last->y, min_y, max_y));
     c->fresh = 0;
+    c->blend = 0;
+    c->offset_x = c->offset_y = 0;
     queue(EV_ABS, ABS_MT_SLOT, slot);
     queue(EV_ABS, ABS_MT_TRACKING_ID, -1);
     c->active = 0;
@@ -187,38 +256,61 @@ release(int slot)
 }
 
 static int
-rejoins(const struct contact *c, int64_t time)
+rejoins(int slot, int64_t time)
 {
+    const struct contact *c = &contacts[slot];
+
     if (!c->samples || time > c->release_at)
         return 0;
     const struct sample *last = &c->history[c->samples - 1];
-    double dx = c->x - last->x;
-    double dy = c->y - last->y;
-    double limit = (double)opts->rejoin_speed * (double)(time - c->lift_at) / NSEC_PER_SEC;
+    double dt = (double)(time - last->time) / NSEC_PER_SEC;
+    double speed = sqrt(c->vx * c->vx + c->vy * c->vy);
+    double dx = c->x - (last->x + c->vx * dt);
+    double dy = c->y - (last->y + c->vy * dt);
+    double limit = opts->rejoin_min + opts->rejoin_slack * speed * dt;
+    double along = speed > 0 ? ((c->x - last->x) * c->vx + (c->y - last->y) * c->vy) / speed : 0;
+    int ok = dx * dx + dy * dy <= limit * limit && along >= -opts->rejoin_min;
 
-    if (limit < opts->rejoin_min)
-        limit = opts->rejoin_min;
-    return dx * dx + dy * dy <= limit * limit;
+    if (opts->debug)
+        fprintf(stderr, "wallview-touch: %s slot %d after %.0f ms, off %.0f px, limit %.0f px, along %.0f px\n",
+                ok ? "rejoin" : "reject", slot, ms(time - c->lift_at), sqrt(dx * dx + dy * dy), limit, along);
+    return ok;
 }
 
 static int
-moving(const struct contact *c, int64_t time)
+holds(int slot, int64_t time)
 {
+    struct contact *c = &contacts[slot];
+
     if (c->samples < 2)
         return 0;
     const struct sample *last = &c->history[c->samples - 1];
-    double dx = last->x - c->origin_x;
-    double dy = last->y - c->origin_y;
+    double speed = velocity(c, &c->vx, &c->vy);
+    int age_ok = time - last->time <= opts->hold_recent;
+    int hold = age_ok && (speed >= opts->start_speed || (c->moved && speed >= opts->hold_speed));
 
-    return time - last->time <= opts->hold_recent && dx * dx + dy * dy >= (double)opts->hold_travel * opts->hold_travel;
+    if (opts->debug) {
+        const struct sample *s = c->history;
+        int n = c->samples;
+
+        fprintf(stderr, "wallview-touch: lift slot %d at %.0f,%d after %.0f ms, %.0f px/s, moved %d, major %d %d %d: %s\n",
+                slot, (double)last->x, last->y, ms(time - last->time), speed, c->moved,
+                n >= 3 ? s[n - 3].major : -1, n >= 2 ? s[n - 2].major : -1, s[n - 1].major,
+                hold ? "hold" : "release");
+    }
+    return hold;
 }
 
 static void
 expire_releases(int64_t now)
 {
     for (int slot = 0; slot < MAX_SLOTS; slot++)
-        if (contacts[slot].releasing && now >= contacts[slot].release_at)
+        if (contacts[slot].releasing && now >= contacts[slot].release_at) {
+            if (opts->debug)
+                fprintf(stderr, "wallview-touch: expire slot %d after %.0f ms\n", slot,
+                        ms(now - contacts[slot].lift_at));
             release(slot);
+        }
 }
 
 static void
@@ -227,11 +319,12 @@ handle_frame(int64_t time)
     for (int slot = 0; slot < MAX_SLOTS; slot++) {
         struct contact *c = &contacts[slot];
 
-        if (c->started && c->releasing && rejoins(c, time)) {
+        if (c->started && c->releasing && rejoins(slot, time)) {
             c->started = 0;
             c->releasing = 0;
             c->dirty = 0;
             c->fresh = 1;
+            c->blend = 1;
             add_sample(c, time);
         } else if (c->started) {
             if (c->releasing) {
@@ -241,6 +334,9 @@ handle_frame(int64_t time)
             c->started = 0;
             c->active = 1;
             c->samples = 0;
+            c->moved = 0;
+            c->blend = 0;
+            c->offset_x = c->offset_y = 0;
             c->origin_x = c->x;
             c->origin_y = c->y;
             add_sample(c, time);
@@ -259,7 +355,7 @@ handle_frame(int64_t time)
             c->ended = 0;
             if (!c->active || c->releasing) {
                 c->dirty = 0;
-            } else if (opts->lift_hold > 0 && moving(c, time)) {
+            } else if (opts->lift_hold > 0 && holds(slot, time)) {
                 c->releasing = 1;
                 c->lift_at = time;
                 c->release_at = time + opts->lift_hold;
@@ -287,6 +383,48 @@ interpolate(int a, int b, int64_t ta, int64_t tb, int64_t t)
 }
 
 static void
+coast(const struct contact *c, const struct sample *last, int64_t target, int *x, int *y)
+{
+    double speed = sqrt(c->vx * c->vx + c->vy * c->vy);
+
+    if (opts->coast <= 0 || speed < opts->coast_speed || target <= last->time)
+        return;
+    double tau = (double)opts->coast / NSEC_PER_SEC;
+    double t = (double)(target - last->time) / NSEC_PER_SEC;
+    double distance = speed * tau * (1 - exp(-t / tau));
+
+    if (distance > opts->coast_max)
+        distance = opts->coast_max;
+    *x = round_half_away(last->x + c->vx / speed * distance);
+    *y = round_half_away(last->y + c->vy / speed * distance);
+}
+
+static void
+predict(const struct contact *c, const struct sample *last, int64_t target, int *x, int *y)
+{
+    const struct sample *a = &c->history[c->samples - 2];
+    int64_t interval = last->time - a->time;
+    int64_t age = target - last->time;
+    int64_t ahead = age;
+    int64_t limit = interval < opts->max_prediction ? interval : opts->max_prediction;
+    int64_t ease_from = interval + interval / 2;
+    double vx, vy;
+
+    if (interval > opts->max_sample_gap || age <= 0 || age > opts->max_sample_gap)
+        return;
+    if (ahead > limit)
+        ahead = limit;
+    if (age > ease_from) {
+        double keep = 1 - (double)(age - ease_from) / (double)(4 * period);
+
+        ahead = keep > 0 ? (int64_t)(ahead * keep) : 0;
+    }
+    velocity(c, &vx, &vy);
+    *x = round_half_away(last->x + vx * ahead / NSEC_PER_SEC);
+    *y = round_half_away(last->y + vy * ahead / NSEC_PER_SEC);
+}
+
+static void
 resample(const struct options *options, int64_t now)
 {
     int64_t target = now - options->latency;
@@ -296,7 +434,7 @@ resample(const struct options *options, int64_t now)
     for (int slot = 0; slot < MAX_SLOTS; slot++) {
         struct contact *c = &contacts[slot];
 
-        if (!c->active || !c->samples || c->releasing)
+        if (!c->active || !c->samples)
             continue;
 
         struct sample *last = &c->history[c->samples - 1];
@@ -304,7 +442,6 @@ resample(const struct options *options, int64_t now)
         int y = last->y;
 
         c->predicted = 0;
-
         if (target < last->time) {
             for (int i = c->samples - 1; i > 0; i--) {
                 struct sample *a = &c->history[i - 1];
@@ -316,21 +453,28 @@ resample(const struct options *options, int64_t now)
                     break;
                 }
             }
-        } else if (c->samples >= 2) {
-            struct sample *a = &c->history[c->samples - 2];
-            int64_t ahead = target - last->time;
-            int64_t limit = (last->time - a->time) / 2;
-
-            if (limit > options->max_prediction)
-                limit = options->max_prediction;
-            if (ahead > limit)
-                ahead = limit;
-            if (last->time - a->time <= options->max_sample_gap && ahead > 0 &&
-                target - last->time <= options->max_sample_gap) {
-                x = interpolate(a->x, last->x, a->time, last->time, last->time + ahead);
-                y = interpolate(a->y, last->y, a->time, last->time, last->time + ahead);
-                c->predicted = x != last->x || y != last->y;
+        } else {
+            if (c->releasing)
+                coast(c, last, target, &x, &y);
+            else if (c->samples >= 2)
+                predict(c, last, target, &x, &y);
+            c->predicted = x != last->x || y != last->y;
+        }
+        if (c->blend) {
+            c->blend = 0;
+            if (c->emitted_x >= 0) {
+                c->offset_x = c->emitted_x - x;
+                c->offset_y = c->emitted_y - y;
             }
+        }
+        if (c->offset_x != 0 || c->offset_y != 0) {
+            x = round_half_away(x + c->offset_x);
+            y = round_half_away(y + c->offset_y);
+            c->offset_x *= 0.7;
+            c->offset_y *= 0.7;
+            if (c->offset_x > -0.5 && c->offset_x < 0.5 && c->offset_y > -0.5 && c->offset_y < 0.5)
+                c->offset_x = c->offset_y = 0;
+            c->predicted = 1;
         }
         c->fresh = 0;
         emit_position(slot, clamp(x, min_x, max_x), clamp(y, min_y, max_y));
@@ -342,26 +486,61 @@ resample(const struct options *options, int64_t now)
 static int dropped;
 static int input_fd;
 
+static int
+read_slots(int code, int32_t *values)
+{
+    struct {
+        uint32_t code;
+        int32_t values[MAX_SLOTS];
+    } slots = { .code = code };
+
+    if (ioctl(input_fd, EVIOCGMTSLOTS(sizeof(slots)), &slots) < 0)
+        return -1;
+    memcpy(values, slots.values, sizeof(slots.values));
+    return 0;
+}
+
+static void
+load_positions(void)
+{
+    int32_t xs[MAX_SLOTS], ys[MAX_SLOTS];
+
+    if (read_slots(ABS_MT_POSITION_X, xs) < 0 || read_slots(ABS_MT_POSITION_Y, ys) < 0)
+        return;
+    for (int slot = 0; slot < MAX_SLOTS; slot++) {
+        if (contacts[slot].x != xs[slot] || contacts[slot].y != ys[slot])
+            contacts[slot].dirty = 1;
+        contacts[slot].x = xs[slot];
+        contacts[slot].y = ys[slot];
+    }
+}
+
 static void
 resync(int64_t time, int *slot)
 {
     struct input_absinfo current_slot;
+    int32_t ids[MAX_SLOTS];
 
     if (ioctl(input_fd, EVIOCGABS(ABS_MT_SLOT), &current_slot) == 0 && current_slot.value >= 0 &&
         current_slot.value < MAX_SLOTS)
         *slot = current_slot.value;
-    struct {
-        uint32_t code;
-        int32_t values[MAX_SLOTS];
-    } ids = { .code = ABS_MT_TRACKING_ID };
-
-    if (ioctl(input_fd, EVIOCGMTSLOTS(sizeof(ids)), &ids) < 0)
+    if (read_slots(ABS_MT_TRACKING_ID, ids) < 0)
         return;
-    for (int slot = 0; slot < MAX_SLOTS; slot++)
-        if ((contacts[slot].active || contacts[slot].started) && !contacts[slot].releasing && ids.values[slot] < 0) {
-            contacts[slot].ended = 1;
-            contacts[slot].started = 0;
+    load_positions();
+    for (int slot = 0; slot < MAX_SLOTS; slot++) {
+        struct contact *c = &contacts[slot];
+
+        if (ids[slot] < 0) {
+            if ((c->active || c->started) && !c->releasing) {
+                c->ended = 1;
+                c->started = 0;
+            }
+        } else if (!c->active || c->releasing || c->tracking_id != ids[slot]) {
+            c->tracking_id = ids[slot];
+            c->started = 1;
+            c->ended = 0;
         }
+    }
     handle_frame(time);
 }
 
@@ -481,29 +660,52 @@ open_touchscreen(const char *device)
     return -1;
 }
 
+static double
+env_number(const char *name, double fallback)
+{
+    const char *value = getenv(name);
+    char *end;
+    double number;
+
+    if (!value || !*value)
+        return fallback;
+    number = strtod(value, &end);
+    while (*end == ' ' || *end == '\n' || *end == '\t')
+        end++;
+    if (*end || number < 0) {
+        fprintf(stderr, "wallview-touch: ignoring %s=%s\n", name, value);
+        return fallback;
+    }
+    return number;
+}
+
 static int64_t
 env_ms(const char *name, double fallback)
 {
-    const char *value = getenv(name);
-
-    return (int64_t)((value ? atof(value) : fallback) * NSEC_PER_MSEC);
+    return (int64_t)(env_number(name, fallback) * NSEC_PER_MSEC);
 }
 
 int
 main(int argc, char **argv)
 {
     const char *device = argc > 1 ? argv[1] : NULL;
-    int rate = getenv("WALLVIEW_TOUCH_RATE") ? atoi(getenv("WALLVIEW_TOUCH_RATE")) : 120;
+    int rate = (int)env_number("WALLVIEW_TOUCH_RATE", 120);
     struct options options = {
         .period = NSEC_PER_SEC / (rate >= 2 && rate <= 1000 ? rate : 120),
         .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 8),
         .max_prediction = env_ms("WALLVIEW_TOUCH_PREDICTION_MS", 12),
         .max_sample_gap = env_ms("WALLVIEW_TOUCH_MAX_GAP_MS", 60),
         .lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 100),
-        .rejoin_speed = getenv("WALLVIEW_TOUCH_REJOIN_PX_PER_S") ? atoll(getenv("WALLVIEW_TOUCH_REJOIN_PX_PER_S")) : 1500,
-        .rejoin_min = getenv("WALLVIEW_TOUCH_REJOIN_PX") ? atoi(getenv("WALLVIEW_TOUCH_REJOIN_PX")) : 60,
-        .hold_travel = getenv("WALLVIEW_TOUCH_HOLD_TRAVEL_PX") ? atoi(getenv("WALLVIEW_TOUCH_HOLD_TRAVEL_PX")) : 20,
-        .hold_recent = env_ms("WALLVIEW_TOUCH_HOLD_RECENT_MS", 50),
+        .rejoin_min = (int)env_number("WALLVIEW_TOUCH_REJOIN_PX", 30),
+        .rejoin_slack = env_number("WALLVIEW_TOUCH_REJOIN_SLACK", 0.75),
+        .hold_travel = (int)env_number("WALLVIEW_TOUCH_HOLD_TRAVEL_PX", 12),
+        .hold_speed = env_number("WALLVIEW_TOUCH_HOLD_PX_PER_S", 60),
+        .start_speed = env_number("WALLVIEW_TOUCH_START_PX_PER_S", 150),
+        .hold_recent = env_ms("WALLVIEW_TOUCH_HOLD_RECENT_MS", 100),
+        .coast = env_ms("WALLVIEW_TOUCH_COAST_MS", 40),
+        .coast_max = (int)env_number("WALLVIEW_TOUCH_COAST_PX", 40),
+        .coast_speed = env_number("WALLVIEW_TOUCH_COAST_PX_PER_S", 150),
+        .debug = (int)env_number("WALLVIEW_TOUCH_DEBUG", 0),
     };
     int clock = CLOCK_MONOTONIC;
     int input = open_touchscreen(device);
@@ -536,6 +738,9 @@ main(int argc, char **argv)
         while (read(input, stale, sizeof(stale)) > 0)
             ;
     }
+    load_positions();
+    for (int i = 0; i < MAX_SLOTS; i++)
+        contacts[i].dirty = 0;
     output = create_output(input);
     if (output < 0) {
         fprintf(stderr, "wallview-touch: uinput: %s\n", strerror(errno));
