@@ -10,9 +10,11 @@ post-layout tasks and a compositing update over the whole page.
 
 The stroke bounding boxes of the legacy circle and ellipse renderer
 without a non-scaling stroke are its fill box inflated by half the stroke
-width, independent of dashes. For such a renderer a dash change is now a
-repaint; every other renderer (paths, rects, text, non-scaling strokes,
-the layer-based SVG engine) still lays out, through a new context
+width; the cached boxes do not depend on dashes. For such a renderer a
+dash change is now a repaint, unless an ancestor up to the SVG root has
+an SVG filter, whose container relies on the child's layout to repaint
+the filtered area. Every other renderer (paths, rects, text, non-scaling
+strokes, the layer-based SVG engine) still lays out, through a new context
 sensitive difference that RenderElement::adjustStyleDifference resolves
 per renderer. RenderStyle::diff reports a dash change as at least a
 repaint, so no caller sees two styles that differ in dashes as equal.
@@ -20,7 +22,7 @@ repaint, so no caller sees two styles that differ in dashes as equal.
 Upstream-Status: Pending
 ---
 diff --git a/Source/WebCore/rendering/RenderElement.cpp b/Source/WebCore/rendering/RenderElement.cpp
-index bff3501..9236f6f 100644
+index bff3501..f7a804f 100644
 --- a/Source/WebCore/rendering/RenderElement.cpp
 +++ b/Source/WebCore/rendering/RenderElement.cpp
 @@ -310,6 +310,9 @@ StyleDifference RenderElement::adjustStyleDifference(StyleDifference diff, Optio
@@ -28,20 +30,20 @@ index bff3501..9236f6f 100644
      }
  
 +    if (contextSensitiveProperties & StyleDifferenceContextSensitiveProperty::StrokeDash)
-+        diff = std::max(diff, strokeBoundsDependOnDashes() ? StyleDifference::Layout : StyleDifference::Repaint);
++        diff = std::max(diff, strokeDashChangeRequiresLayout() ? StyleDifference::Layout : StyleDifference::Repaint);
 +
      if (contextSensitiveProperties & StyleDifferenceContextSensitiveProperty::Opacity) {
          if (!hasLayer() || !downcast<RenderLayerModelObject>(*this).layer()->isComposited())
              diff = std::max(diff, StyleDifference::RepaintLayer);
 diff --git a/Source/WebCore/rendering/RenderElement.h b/Source/WebCore/rendering/RenderElement.h
-index 54729d9..d999db6 100644
+index 54729d9..1bee4bd 100644
 --- a/Source/WebCore/rendering/RenderElement.h
 +++ b/Source/WebCore/rendering/RenderElement.h
 @@ -279,6 +279,7 @@ public:
      virtual void animationPaused(double /* timeOffset */, const BlendingKeyframes&) { }
      virtual void animationFinished(const BlendingKeyframes&) { }
      virtual void transformRelatedPropertyDidChange() { }
-+    virtual bool strokeBoundsDependOnDashes() const { return true; }
++    virtual bool strokeDashChangeRequiresLayout() const { return true; }
  
      // https://www.w3.org/TR/css-transforms-1/#transform-box
      inline FloatRect transformReferenceBoxRect(const RenderStyle&) const;
@@ -137,32 +139,56 @@ index 7263627..acca76d 100644
      bool operator==(const SVGRenderStyle&) const;
  
 diff --git a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp
-index 03d46c4..1921389 100644
+index 03d46c4..f42a1cc 100644
 --- a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp
 +++ b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp
-@@ -80,6 +80,13 @@ void LegacyRenderSVGEllipse::updateShapeFromElement()
+@@ -27,11 +27,14 @@
+ #include "config.h"
+ #include "LegacyRenderSVGEllipse.h"
+ 
++#include "LegacyRenderSVGRoot.h"
+ #include "LegacyRenderSVGShapeInlines.h"
+ #include "SVGCircleElement.h"
+ #include "SVGElementTypeHelpers.h"
+ #include "SVGEllipseElement.h"
+ #include "SVGRenderStyle.h"
++#include "SVGResources.h"
++#include "SVGResourcesCache.h"
+ #include <wtf/TZoneMallocInlines.h>
+ 
+ namespace WebCore {
+@@ -80,6 +83,22 @@ void LegacyRenderSVGEllipse::updateShapeFromElement()
          m_strokeBoundingBox->inflate(strokeWidth() / 2);
  }
  
-+bool LegacyRenderSVGEllipse::strokeBoundsDependOnDashes() const
++bool LegacyRenderSVGEllipse::strokeDashChangeRequiresLayout() const
 +{
 +    if (m_shapeType != ShapeType::Circle && m_shapeType != ShapeType::Ellipse)
 +        return true;
-+    return hasNonScalingStroke();
++    if (hasNonScalingStroke())
++        return true;
++    for (CheckedPtr ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
++        auto* resources = SVGResourcesCache::cachedResourcesForRenderer(*ancestor);
++        if (resources && resources->filter())
++            return true;
++        if (is<LegacyRenderSVGRoot>(*ancestor))
++            break;
++    }
++    return false;
 +}
 +
  void LegacyRenderSVGEllipse::calculateRadiiAndCenter()
  {
      Ref graphicsElement = this->graphicsElement();
 diff --git a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h
-index 67c5910..55c7d4a 100644
+index 67c5910..656fe20 100644
 --- a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h
 +++ b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h
 @@ -43,6 +43,7 @@ private:
      void updateShapeFromElement() override;
      bool isEmpty() const override { return hasPath() ? LegacyRenderSVGShape::isEmpty() : m_fillBoundingBox.isEmpty(); }
      bool isRenderingDisabled() const override;
-+    bool strokeBoundsDependOnDashes() const override;
++    bool strokeDashChangeRequiresLayout() const override;
      void fillShape(GraphicsContext&) const override;
      void strokeShape(GraphicsContext&) const override;
      bool shapeDependentStrokeContains(const FloatPoint&, PointCoordinateSpace = GlobalCoordinateSpace) override;
