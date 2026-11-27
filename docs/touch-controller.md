@@ -317,6 +317,21 @@ Only after (a) has succeeded at least twice.
 3. Flash with the proven flasher, then measure: INT period and jitter with `touchprobe` (finger circling), rest jitter with a finger held still, five-finger test, palm, edge taps, behaviour with the relay board switching and with USB power versus mains.
 4. Revert to the original image between experiments whenever the result is unclear.
 
+Results:
+
+| 2026-11-27, dev panel | vendor | `cfg[0x66]` 20 → 10 (checksum 0x99590e41) |
+|---|---|---|
+| no finger, 10 s: INT / ghost reads | 0 / 0 | 0 / 0 |
+| finger still: INT interval median / p90 / max | 22.5 / 39.4 / 58 ms | 16.4 / 23.3 / 43 ms |
+| finger still: position spread | 1 px | 1–2 px |
+| circling: INT interval median / p90 / max | 14.8 / 39.6 / 118 ms (15 s) | 19.4 / 45.4 / 100 ms (10 s) |
+| circling: new position median / p90 | 18.5 / 48.3 ms | 20.5 / 51.1 ms |
+| circling: reads without touch | 7 of 760 | 2 of 226 |
+
+`cfg[0x66]` = 10 speeds up reporting with a finger at rest but not while it moves, and the slow tail (p90 40–50 ms) stays. It is not the active scan period. The circling capture on the try image was short and its speed not controlled, so that row is weak. Both flashes rc 0 on the first attempt; the vendor image is back and verified. Next candidates: `cfg[0xb4]` (u16 339) and the fields at 0x1668/0x1669.
+
+Measuring with a person at the panel works best as one capture with a fixed script read out beforehand (for example 40 s: 0–10 s no touch, 10–20 s finger still, 20–40 s circling), started by the person and split by time afterwards. Step-by-step prompts over chat arrive late and mix up the captures.
+
 Risks, highest first:
 
 - Wrong guess about a field makes the front end not scan at all or report ghosts. Recoverable by flashing the original, as long as (a) holds.
