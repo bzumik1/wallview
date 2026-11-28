@@ -34,16 +34,34 @@ static void s(int64_t t, int sl) { ev(t, EV_ABS, ABS_MT_SLOT, sl); }
 static void down(int64_t t, int sl, int id, int x, int y) { s(t, sl); ev(t, EV_ABS, ABS_MT_TRACKING_ID, id); ev(t, EV_ABS, ABS_MT_POSITION_X, x); ev(t, EV_ABS, ABS_MT_POSITION_Y, y); ev(t, EV_SYN, SYN_REPORT, 0); }
 static void move(int64_t t, int sl, int x, int y) { s(t, sl); ev(t, EV_ABS, ABS_MT_POSITION_X, x); ev(t, EV_ABS, ABS_MT_POSITION_Y, y); ev(t, EV_SYN, SYN_REPORT, 0); }
 static void up(int64_t t, int sl) { s(t, sl); ev(t, EV_ABS, ABS_MT_TRACKING_ID, -1); ev(t, EV_SYN, SYN_REPORT, 0); }
+static struct input_event frame_events[1024];
+static int frame_len;
+static void apply_frame(void) {
+	int ending[MAX_SLOTS] = { 0 }, sl = cur_slot;
+	for (int i = 0; i < frame_len; i++) {
+		struct input_event *e = &frame_events[i];
+		if (e->type != EV_ABS) continue;
+		if (e->code == ABS_MT_SLOT) sl = e->value;
+		else if (e->code == ABS_MT_TRACKING_ID && e->value < 0 && sl >= 0 && sl < MAX_SLOTS) ending[sl] = 1;
+	}
+	for (int i = 0; i < frame_len; i++) {
+		struct input_event *e = &frame_events[i];
+		if (e->type != EV_ABS) continue;
+		if (e->code == ABS_MT_SLOT) cur_slot = e->value;
+		else if (e->code == ABS_MT_TRACKING_ID) { if (e->value < 0) { ups++; down_now[cur_slot] = 0; } else { downs++; down_now[cur_slot] = 1; lastx = -1; } }
+		else if (e->code == ABS_MT_POSITION_X && !ending[cur_slot]) outx[cur_slot] = e->value;
+		else if (e->code == ABS_MT_POSITION_Y && !ending[cur_slot]) outy[cur_slot] = e->value;
+		else if (e->code == ABS_X) abs_x = e->value;
+	}
+	frame_len = 0;
+}
 static void drain(int64_t t) {
 	struct input_event e[256]; ssize_t n;
 	while ((n = read(pipefd[0], e, sizeof e)) > 0)
 		for (size_t i = 0; i < (size_t)n / sizeof e[0]; i++) {
-			if (e[i].type != EV_ABS) continue;
-			if (e[i].code == ABS_MT_SLOT) cur_slot = e[i].value;
-			else if (e[i].code == ABS_MT_TRACKING_ID) { if (e[i].value < 0) { ups++; down_now[cur_slot] = 0; } else { downs++; down_now[cur_slot] = 1; lastx = -1; } }
-			else if (e[i].code == ABS_MT_POSITION_X) outx[cur_slot] = e[i].value;
-			else if (e[i].code == ABS_MT_POSITION_Y) outy[cur_slot] = e[i].value;
-			else if (e[i].code == ABS_X) abs_x = e[i].value;
+			assert(frame_len < 1024);
+			frame_events[frame_len++] = e[i];
+			if (e[i].type == EV_SYN && e[i].code == SYN_REPORT) apply_frame();
 		}
 	if (down_now[0]) {
 		if (lastx >= 0) {
@@ -327,6 +345,12 @@ int main(void) {
 	    run_until(t + after * MS); up(t + after * MS, 0); drain(t + after * MS); if (abs(outx[0] - (int)x) > 3) bad++;
 	    up(t + after * MS + 5 * MS, 1); run_until(t + 200 * MS); t += 200 * MS; }
 	  printf("second finger resting, first stops and lifts within a tick: %d of %d released off the finger\n", bad, n); assert(!bad); }
+
+	{ reset(); t += 500 * MS; int xs[] = { 100, 160, 220, 280, 340, 310 }; down(t, 0, 63, 100, 240); drain(t);
+	  for (int i = 1; i < 6; i++) { t += 40 * MS; run_until(t); move(t, 0, xs[i], 240); drain(t); }
+	  t += 15 * MS; run_until(t); up(t, 0); drain(t); t += 45 * MS; run_until(t); down(t, 0, 64, 252, 240); drain(t);
+	  printf("false lift right after the finger turned back: downs %d ups %d\n", downs, ups); assert(downs == 1 && ups == 0);
+	  up(t + 20 * MS, 0); run_until(t + 400 * MS); t += 400 * MS; }
 
 	setenv("WALLVIEW_TOUCH_X", "1e13", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "nan", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);

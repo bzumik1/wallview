@@ -517,6 +517,15 @@ release(int slot)
     c->fresh = 0;
     c->blend = 0;
     c->offset_x = c->offset_y = 0;
+    for (int i = 0, s = -1; i < pending_count; i++) {
+        if (pending[i].type == EV_ABS && pending[i].code == ABS_MT_SLOT)
+            s = pending[i].value;
+        else if (s == slot && pending[i].type == EV_ABS &&
+                 (pending[i].code == ABS_MT_POSITION_X || pending[i].code == ABS_MT_POSITION_Y)) {
+            flush();
+            break;
+        }
+    }
     queue(EV_ABS, ABS_MT_SLOT, slot);
     queue(EV_ABS, ABS_MT_TRACKING_ID, -1);
     c->active = 0;
@@ -565,6 +574,15 @@ holds(int slot, int64_t time)
             return 0;
     const struct sample *last = &c->history[c->samples - 1];
     double speed = velocity(c, &c->vx, &c->vy);
+    const struct sample *before = &c->history[c->samples - 2];
+
+    if (speed > 0 && c->vx == 0 && c->vy == 0 &&
+        hypot(last->x - before->x, last->y - before->y) >= opts->hold_travel) {
+        double dt = (double)(last->time - before->time) / NSEC_PER_SEC;
+
+        c->vx = (last->x - before->x) / dt;
+        c->vy = (last->y - before->y) / dt;
+    }
     int age_ok = time - last->time <= opts->hold_recent;
     int hold = age_ok && (opts->hold_max_speed <= 0 || speed <= opts->hold_max_speed) &&
                ((c->reach >= opts->start_travel && speed >= opts->start_speed) ||

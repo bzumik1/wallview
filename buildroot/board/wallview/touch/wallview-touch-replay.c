@@ -108,16 +108,36 @@ raw_position(int64_t t, double *x, double *y)
 static void
 drain(int64_t t, int tick)
 {
-    struct input_event e[256];
+    static struct input_event e[8192];
+    size_t count = 0;
     ssize_t n;
 
-    while ((n = read(pipe_out[0], e, sizeof(e))) > 0)
-        for (size_t i = 0; i < (size_t)n / sizeof(e[0]); i++) {
+    while (count < sizeof(e) / sizeof(e[0]) &&
+           (n = read(pipe_out[0], e + count, (sizeof(e) / sizeof(e[0]) - count) * sizeof(e[0]))) > 0)
+        count += (size_t)n / sizeof(e[0]);
+    for (size_t start = 0, end; start < count; start = end) {
+        int ending = 0;
+
+        for (end = start; end < count; end++) {
+            if (e[end].type == EV_SYN && e[end].code == SYN_REPORT) {
+                end++;
+                break;
+            }
+        }
+        for (size_t i = start, s = (size_t)out_slot; i < end; i++) {
+            if (e[i].type == EV_ABS && e[i].code == ABS_MT_SLOT)
+                s = e[i].value;
+            else if (e[i].type == EV_ABS && e[i].code == ABS_MT_TRACKING_ID && e[i].value < 0 && s == 0)
+                ending = 1;
+        }
+        for (size_t i = start; i < end; i++) {
             if (e[i].type != EV_ABS)
                 continue;
             if (e[i].code == ABS_MT_SLOT)
                 out_slot = e[i].value;
             if (out_slot != 0)
+                continue;
+            if (ending && (e[i].code == ABS_MT_POSITION_X || e[i].code == ABS_MT_POSITION_Y))
                 continue;
             if (e[i].code == ABS_MT_TRACKING_ID) {
                 if (e[i].value < 0) {
@@ -154,6 +174,7 @@ drain(int64_t t, int tick)
                 out_y = e[i].value;
             }
         }
+    }
     if (!tick || !out_down)
         return;
     ticks++;
