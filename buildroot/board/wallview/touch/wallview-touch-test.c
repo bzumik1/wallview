@@ -1,7 +1,26 @@
+#define _GNU_SOURCE
+#include <stdarg.h>
+#include <sys/ioctl.h>
+static int fake_ioctl(int fd, unsigned long request, ...);
 #define main wt_main
+#define ioctl fake_ioctl
 #include "wallview-touch.c"
+#undef ioctl
 #undef main
 #include <assert.h>
+static int kernel_id[MAX_SLOTS], kernel_x[MAX_SLOTS], kernel_y[MAX_SLOTS], slot_reads, move_after = -1, moved_x, moved_y;
+static int fake_ioctl(int fd, unsigned long request, ...) {
+	va_list ap; va_start(ap, request); void *arg = va_arg(ap, void *); va_end(ap);
+	if (fd < 0) return -1;
+	if (request == EVIOCGABS(ABS_MT_SLOT)) { ((struct input_absinfo *)arg)->value = 0; return 0; }
+	if (_IOC_TYPE(request) == 'E' && _IOC_NR(request) == 0x0a) {
+		uint32_t *code = arg; int32_t *v = (int32_t *)(code + 1);
+		if (slot_reads++ == move_after) { kernel_x[0] = moved_x; kernel_y[0] = moved_y; }
+		for (int i = 0; i < MAX_SLOTS; i++) v[i] = *code == ABS_MT_TRACKING_ID ? kernel_id[i] : *code == ABS_MT_POSITION_X ? kernel_x[i] : kernel_y[i];
+		return 0;
+	}
+	return ioctl(fd, request, arg);
+}
 #define MS NSEC_PER_MSEC
 static int pipefd[2];
 static struct options o;
@@ -36,7 +55,7 @@ static void drain(int64_t t) {
 	}
 }
 static int64_t clock_t0;
-static void run_until(int64_t t) { while (clock_t0 + o.period <= t) { clock_t0 += o.period; resample(&o, clock_t0); drain(clock_t0); } }
+static void run_until(int64_t t) { while (clock_t0 + o.period <= t) { clock_t0 += o.period; if (timer_armed) resample(&o, clock_t0); drain(clock_t0); } }
 static void reset(void) { memset(contacts, 0, sizeof contacts); downs = ups = 0; maxstep = 0; maxstill = 0; still_since = 0; lastx = -1; memset(down_now, 0, sizeof down_now); }
 static void defaults(void) {
 	setenv("WALLVIEW_TOUCH_LIFT_MS", "", 1);
@@ -228,6 +247,33 @@ int main(void) {
 	t = drag(t, 0, &x, &y, 500, 0, 6, 17 * MS); run_until(t + 165 * MS);
 	printf("PREDICT_EASE_MS 250, 165 ms after the last sample: output %d, sample %d\n", outx[0], (int)x); assert(outx[0] > (int)x + 5);
 	o.ease_min = 100 * MS; up(t + 170 * MS, 0); run_until(t + 450 * MS); t += 450 * MS;
+
+	{ int in[2]; if (pipe(in) < 0) return 1; fcntl(in[0], F_SETFL, O_NONBLOCK); input_fd = in[0];
+	  for (int i = 0; i < MAX_SLOTS; i++) kernel_id[i] = -1;
+	  reset(); down(t, 1, 47, 300, 300); drain(t); t += 20 * MS; run_until(t);
+	  kernel_id[0] = 48; kernel_x[0] = 60; kernel_y[0] = 420; move_after = 3; moved_x = 200; moved_y = 210; slot_reads = 0;
+	  resync(t, &slot); flush(); drain(t); run_until(t + 20 * MS); t += 20 * MS;
+	  printf("resync: slot 0 down %d at %d,%d, slot 1 down %d, snapshots %d\n", down_now[0], outx[0], outy[0], down_now[1], slot_reads);
+	  assert(down_now[0] && outx[0] == 200 && outy[0] == 210 && !down_now[1]);
+	  kernel_id[0] = -1; move_after = -1; resync(t, &slot); flush(); drain(t); run_until(t + 300 * MS); t += 300 * MS; assert(!down_now[0]);
+	  close(in[0]); close(in[1]); input_fd = -1; }
+
+	{ struct options saved = o; int bad = 0, n = 0;
+	  o.period = NSEC_PER_SEC / 60; period = o.period; o.blend = 0.9; o.max_sample_gap = 100 * MS;
+	  for (int g = 40; g <= 140; g += 5) for (int j = 31; j <= 120; j += 7, n++) {
+	    reset(); x = 100; y = 240; down(t, 0, 49, 100, 240); drain(t);
+	    t = drag(t, 0, &x, &y, 400, 0, 5, 30 * MS); t += g * MS; run_until(t); x += j; move(t, 0, (int)x, 240); drain(t);
+	    run_until(t + 1500 * MS); t += 1500 * MS; if (outx[0] != (int)x) bad++;
+	    up(t, 0); run_until(t + 400 * MS); t += 400 * MS; }
+	  printf("blend settles on the finger at 60 Hz, BLEND 0.9, MAX_GAP_MS 100: %d of %d off\n", bad, n); assert(!bad);
+	  o = saved; period = o.period; }
+	for (int after = 9; after <= 25; after += 8) {
+	  reset(); x = 100; down(t, 0, 50, 100, 100); down(t, 1, 51, 100, 300); drain(t);
+	  for (int i = 0; i < 6; i++) { t += 30 * MS; run_until(t); x += 15; move(t, 0, (int)x, 100); move(t, 1, (int)x, 300); drain(t); }
+	  t += 70 * MS; run_until(t); x += 75; move(t, 0, (int)x, 100); move(t, 1, (int)x, 300); drain(t);
+	  t += after * MS; run_until(t); up(t, 0); up(t, 1); drain(t);
+	  printf("two fingers lifted %d ms into a gap blend: released at %d %d, finger at %d\n", after, outx[0], outx[1], (int)x);
+	  assert(abs(outx[0] - (int)x) <= 5 && abs(outx[1] - (int)x) <= 5); run_until(t + 300 * MS); t += 300 * MS; }
 
 	setenv("WALLVIEW_TOUCH_X", "1e13", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "nan", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);

@@ -485,9 +485,13 @@ release(int slot)
     int first = pointer_slot() == slot;
     struct sample *last = c->samples ? &c->history[c->samples - 1] : NULL;
 
+    double vx, vy;
+    int behind = (c->offset_x != 0 || c->offset_y != 0) && c->samples > 1 &&
+        (velocity(c, &vx, &vy), c->offset_x * vx + c->offset_y * vy <= 0);
+
     c->releasing = 0;
     c->coasting = 0;
-    if (last && (!c->predicted || c->fresh))
+    if (last && (!c->predicted || c->fresh || behind))
         emit_position(slot, clamp(last->x, min_x, max_x), clamp(last->y, min_y, max_y));
     c->fresh = 0;
     c->blend = 0;
@@ -882,6 +886,8 @@ resync(int64_t time, int *slot)
         if (read_slots(ABS_MT_TRACKING_ID, ids) < 0)
             return;
         load_positions();
+        if (input_fd >= 0)
+            usleep(300);
 
         int32_t again[MAX_SLOTS], xs[MAX_SLOTS], ys[MAX_SLOTS];
         int settled = read_slots(ABS_MT_TRACKING_ID, again) == 0 && read_slots(ABS_MT_POSITION_X, xs) == 0 &&
@@ -1082,8 +1088,10 @@ load_options(struct options *options)
         .drm_driver = getenv("WALLVIEW_TOUCH_DRM_DRIVER") && *getenv("WALLVIEW_TOUCH_DRM_DRIVER") ? getenv("WALLVIEW_TOUCH_DRM_DRIVER") : "rockchip",
         .vblank_offset = env_ms("WALLVIEW_TOUCH_VBLANK_OFFSET_MS", 10),
     };
-    if (options->blend > 0.95)
+    if (options->blend > 0.95) {
+        fprintf(stderr, "wallview-touch: ignoring WALLVIEW_TOUCH_BLEND above 0.95\n");
         options->blend = 0.7;
+    }
 }
 
 static volatile sig_atomic_t stopping;
