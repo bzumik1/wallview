@@ -57,6 +57,8 @@ struct contact {
     double vx;
     double vy;
     int blend;
+    double dir_x;
+    double dir_y;
     double offset_x;
     double offset_y;
     int coasting;
@@ -489,8 +491,8 @@ release(int slot)
     double dx = 0, dy = 0;
 
     if (prev) {
-        dx = last->x - prev->x;
-        dy = last->y - prev->y;
+        dx = c->dir_x;
+        dy = c->dir_y;
         if (dx == 0 && dy == 0)
             velocity(c, &dx, &dy);
     }
@@ -498,7 +500,7 @@ release(int slot)
 
     c->releasing = 0;
     c->coasting = 0;
-    if (last && (blended ? !ahead : !c->predicted || c->fresh))
+    if (last && (blended || (c->predicted && c->fresh) ? !ahead : !c->predicted))
         emit_position(slot, clamp(last->x, min_x, max_x), clamp(last->y, min_y, max_y));
     c->fresh = 0;
     c->blend = 0;
@@ -599,6 +601,8 @@ handle_frame(int64_t time)
             c->dirty = 0;
             c->fresh = 1;
             c->blend = 1;
+            c->dir_x = c->vx;
+            c->dir_y = c->vy;
             add_sample(c, time);
         } else if (c->started) {
             int held = c->active;
@@ -619,6 +623,7 @@ handle_frame(int64_t time)
             c->reach = 0;
             c->blend = 0;
             c->offset_x = c->offset_y = 0;
+            c->dir_x = c->dir_y = 0;
             c->origin_x = c->x;
             c->origin_y = c->y;
             add_sample(c, time);
@@ -657,6 +662,10 @@ handle_frame(int64_t time)
                 (double)(c->x - last_x) * (c->x - last_x) + (double)(c->y - last_y) * (c->y - last_y) >
                     (double)opts->rejoin_min * opts->rejoin_min)
                 c->blend = 1;
+            if (c->x != last_x || c->y != last_y) {
+                c->dir_x = c->x - last_x;
+                c->dir_y = c->y - last_y;
+            }
             add_sample(c, time);
         }
     }

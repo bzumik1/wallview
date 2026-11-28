@@ -275,13 +275,13 @@ int main(void) {
 	  printf("two fingers lifted %d ms into a gap blend: shown %d, released at %d %d, finger at %d\n", after, pre, outx[0], outx[1], (int)x);
 	  assert(outx[0] >= pre && outx[1] == outx[0] && (pre >= (int)x || outx[0] == (int)x)); run_until(t + 300 * MS); t += 300 * MS; }
 
-	for (int after = 0; after <= 25; after += 5) {
+	for (int land = -10; land <= 10; land += 10) for (int after = 0; after <= 25; after += 5) {
 	  reset(); x = 50; y = 240; down(t, 0, 52, 50, 240); drain(t);
 	  t = drag(t, 0, &x, &y, 400, 0, 8, 25 * MS); int lx = (int)x;
 	  run_until(t + 80 * MS); up(t + 80 * MS, 0); drain(t + 80 * MS);
-	  t += 155 * MS; run_until(t); down(t, 0, 53, lx + 10, 240); drain(t);
+	  t += 155 * MS; run_until(t); down(t, 0, 53, lx + land, 240); drain(t);
 	  run_until(t + after * MS); int pre = outx[0]; up(t + after * MS, 0); drain(t + after * MS);
-	  printf("lift %d ms after a rejoin behind the coast: shown %d, released at %d\n", after, pre, outx[0]); assert(outx[0] >= pre);
+	  printf("lift %d ms after a rejoin %+d px from the last sample, behind the coast: shown %d, released at %d\n", after, land, pre, outx[0]); assert(outx[0] >= pre);
 	  run_until(t + 400 * MS); t += 400 * MS; }
 
 	setenv("WALLVIEW_TOUCH_X", "1e13", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);

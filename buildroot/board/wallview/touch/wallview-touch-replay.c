@@ -107,7 +107,11 @@ drain(int64_t t, int tick)
                     if (prev_x >= 0 && have_prev_step) {
                         double sx = out_x - prev_x, sy = out_y - prev_y, step = sqrt(sx * sx + sy * sy);
 
-                        if (sx * prev_dx + sy * prev_dy < 0 && step > 3) {
+                        double ax, ay, bx, by;
+                        int against_stroke = raw_position(t, &ax, &ay) && raw_position(t - 50 * NSEC_PER_MSEC, &bx, &by) &&
+                                             sx * (ax - bx) + sy * (ay - by) < 0;
+
+                        if ((sx * prev_dx + sy * prev_dy < 0 || against_stroke) && step > 3) {
                             release_back_steps++;
                             if (step > release_back_worst)
                                 release_back_worst = step;
@@ -231,7 +235,7 @@ main(int argc, char **argv)
     char line[256];
     int cap = 1 << 16;
     const char *keep_env = getenv("REPLAY_KEEP_UNPRESSED");
-    int hold_status = keep_env && *keep_env;
+    int hold_status = keep_env && atoi(keep_env) > 0;
     const char *timeout_env = getenv("REPLAY_KEEP_TIMEOUT_MS");
     int64_t keep_timeout = (timeout_env && *timeout_env ? atoll(timeout_env) : 110) * NSEC_PER_MSEC;
     int kept = 0;

@@ -313,3 +313,12 @@ Thirteenth review (round 9 of the loop, on 7085aaa). Both reviewers found the sa
 - `WALLVIEW_TOUCH_RATE` outside 2–1000 is now logged when ignored.
 - `S35wallview-touch` removes its PID file when the loop ends because resampling was turned off, so a later `stop` cannot kill an unrelated process that reused the PID and `start` is not skipped.
 - Tests: two fingers lifted 9–93 ms into a gap blend never step back and end on the finger when the output trails it (fails on 7085aaa); a lift 0–25 ms after a rejoin behind the coast does not step back (fails on 7085aaa and df08388).
+
+Fourteenth review (round 10 of the loop, on bc9eb32). Nothing in the daemon's contact handling, patch 0006 or the build; three release cases and two small script issues. Applied:
+
+- After a rejoin that landed on or behind the last sample before the false lift (a finger that slowed during the lift), the release direction came from those two samples and pointed against the stroke or was zero, so a lift right after the rejoin went back from the coasted position to the sample (up to 46 px; 384 back-steps in 200,000 random strokes, worst 53 px). Each contact now keeps its stroke direction: the last move that changed the position, or the lift velocity at a rejoin.
+- A sample followed by its lift before the next tick was emitted even when prediction had already carried the output past it (the 15 two-finger back-steps of the thirteenth review, worst 17 px). That case now uses the same "not ahead" test. Random strokes now: 0 release frames stepping back more than 3 px with one or two fingers; what remains are 1–5 px clamp effects at the screen edge. Ticks of a held lift can still move back while a rejoin blend pulls the output to a rejoin that landed behind the coast; that is the blend, not the release.
+- The replay's release back-step count also counts a step against the finger's last 50 ms of movement, not only against the previous output step. Capture: 0 in all four combinations.
+- `REPLAY_KEEP_UNPRESSED=0` turned the patch model on; only a positive number does now.
+- `S35wallview-touch start` does nothing when resampling is off, so the loop's own PID file removal cannot race the parent writing it.
+- Test: a lift 0–25 ms after a rejoin 10 px behind, on, or 10 px past the last sample does not step back (fails on bc9eb32).

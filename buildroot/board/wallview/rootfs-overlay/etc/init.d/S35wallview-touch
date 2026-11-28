@@ -28,6 +28,7 @@ start)
 	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
 		exit 0
 	fi
+	[ "$(cat /data/wallview/touch-resampling 2>/dev/null)" = off ] && exit 0
 	touch_loop </dev/null >/dev/null 2>&1 &
 	echo $! > "$PIDFILE"
 	;;
