@@ -709,6 +709,14 @@ coast(struct contact *c, const struct sample *last, int64_t target, int64_t step
     return spent || *x < min_x || *x > max_x || *y < min_y || *y > max_y;
 }
 
+static int64_t
+prediction_life(void)
+{
+    int64_t fade = 4 * (timer_armed == 2 ? frame : period);
+
+    return opts->ease_min + fade > opts->max_sample_gap ? opts->ease_min + fade : opts->max_sample_gap;
+}
+
 static void
 predict(const struct contact *c, const struct sample *last, int64_t target, int *x, int *y)
 {
@@ -719,12 +727,13 @@ predict(const struct contact *c, const struct sample *last, int64_t target, int 
     int64_t limit = interval < opts->max_prediction ? interval : opts->max_prediction;
     int64_t ease_from = interval + interval / 2 > opts->ease_min ? interval + interval / 2 : opts->ease_min;
     int64_t fade = 4 * (timer_armed == 2 ? frame : period);
+    int64_t life = prediction_life();
 
-    if (ease_from > opts->max_sample_gap - fade)
-        ease_from = opts->max_sample_gap - fade > 0 ? opts->max_sample_gap - fade : 0;
+    if (ease_from > life - fade)
+        ease_from = life - fade > 0 ? life - fade : 0;
     double vx, vy;
 
-    if (interval > opts->max_sample_gap || age <= 0 || age > opts->max_sample_gap || c->reach < opts->predict_travel)
+    if (interval > opts->max_sample_gap || age <= 0 || age > life || c->reach < opts->predict_travel)
         return;
     if (ahead > limit)
         ahead = limit;
@@ -801,7 +810,9 @@ resample(const struct options *options, int64_t now)
                 c->offset_y = (c->emitted_y - y) * decay;
             }
         }
-        if (c->offset_x != 0 || c->offset_y != 0) {
+        int blending = c->offset_x != 0 || c->offset_y != 0;
+
+        if (blending) {
             x = round_half_away(x + c->offset_x);
             y = round_half_away(y + c->offset_y);
             c->offset_x *= decay;
@@ -814,7 +825,7 @@ resample(const struct options *options, int64_t now)
         emit_position(slot, clamp(x, min_x, max_x), clamp(y, min_y, max_y));
         if (spent)
             release(slot);
-        else if (c->releasing || c->offset_x != 0 || c->offset_y != 0 || target - last->time <= options->max_sample_gap)
+        else if (c->releasing || blending || target - last->time <= prediction_life())
             busy = 1;
     }
     flush();
@@ -871,7 +882,14 @@ resync(int64_t time, int *slot)
         if (read_slots(ABS_MT_TRACKING_ID, ids) < 0)
             return;
         load_positions();
-        if (tries == 8 || input_fd < 0 || read(input_fd, late, sizeof(late)) <= 0)
+
+        int32_t again[MAX_SLOTS], xs[MAX_SLOTS], ys[MAX_SLOTS];
+        int settled = read_slots(ABS_MT_TRACKING_ID, again) == 0 && read_slots(ABS_MT_POSITION_X, xs) == 0 &&
+                      read_slots(ABS_MT_POSITION_Y, ys) == 0 && !memcmp(again, ids, sizeof(ids));
+
+        for (int i = 0; settled && i < MAX_SLOTS; i++)
+            settled = ids[i] < 0 || (xs[i] == contacts[i].x && ys[i] == contacts[i].y);
+        if (tries == 8 || ((input_fd < 0 || read(input_fd, late, sizeof(late)) <= 0) && settled))
             break;
         while (read(input_fd, late, sizeof(late)) > 0)
             ;

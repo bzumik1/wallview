@@ -224,6 +224,11 @@ int main(void) {
 	  printf("jump after a %d ms gap the kernel bridged: largest step %.0f px (before the gap %.0f)\n", g, maxstep, before); assert(maxstep < 40); }
 	up(t, 0); run_until(t + 300 * MS); t += 300 * MS;
 
+	reset(); o.ease_min = 250 * MS; x = 40; y = 240; down(t, 0, 45, 40, 240); drain(t);
+	t = drag(t, 0, &x, &y, 500, 0, 6, 17 * MS); run_until(t + 165 * MS);
+	printf("PREDICT_EASE_MS 250, 165 ms after the last sample: output %d, sample %d\n", outx[0], (int)x); assert(outx[0] > (int)x + 5);
+	o.ease_min = 100 * MS; up(t + 170 * MS, 0); run_until(t + 450 * MS); t += 450 * MS;
+
 	setenv("WALLVIEW_TOUCH_X", "1e13", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "nan", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "abc", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);

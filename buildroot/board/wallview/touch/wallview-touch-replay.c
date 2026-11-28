@@ -250,8 +250,8 @@ main(int argc, char **argv)
             raws[nraw] = raws[nraw - 1];
             raws[nraw].kept = 1;
             raws[nraw++].time = (int64_t)start;
-            kept++;
-            kept_at = (int64_t)start;
+            if (!kept++)
+                kept_at = (int64_t)start;
             continue;
         }
         kept = 0;

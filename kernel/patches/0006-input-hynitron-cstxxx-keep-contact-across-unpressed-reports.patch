@@ -1,5 +1,5 @@
 diff --git a/drivers/input/touchscreen/hynitron_cstxxx.c b/drivers/input/touchscreen/hynitron_cstxxx.c
-index e7c2dcd..0a3e3f4 100644
+index e7c2dcd..e05b53a 100644
 --- a/drivers/input/touchscreen/hynitron_cstxxx.c
 +++ b/drivers/input/touchscreen/hynitron_cstxxx.c
 @@ -13,6 +13,7 @@
@@ -64,8 +64,8 @@ index e7c2dcd..0a3e3f4 100644
 +	    ts_data->unpressed[id] >= CST3XX_MAX_UNPRESSED_FRAMES)
 +		return;
 +
-+	ts_data->unpressed[id]++;
-+	ts_data->kept_at[id] = jiffies;
++	if (!ts_data->unpressed[id]++)
++		ts_data->kept_at[id] = jiffies;
 +	input_mt_slot(ts_data->input_dev, id);
 +	input_mt_report_slot_state(ts_data->input_dev, MT_TOOL_FINGER, true);
 +}
