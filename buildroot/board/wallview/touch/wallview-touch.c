@@ -59,6 +59,7 @@ struct contact {
     int blend;
     double dir_x;
     double dir_y;
+    int turned;
     double offset_x;
     double offset_y;
     int coasting;
@@ -128,9 +129,18 @@ now_ns(void)
     return ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
 }
 
+static int frame_slot = -1;
+static int sent_slot = -1;
+static void flush(void);
+
 static void
 queue(int type, int code, int value)
 {
+    if (type == EV_ABS && code == ABS_MT_SLOT) {
+        if (pending_count && frame_slot >= 0 && value != frame_slot)
+            flush();
+        frame_slot = value;
+    }
     if (pending_count == (int)(sizeof(pending) / sizeof(pending[0])))
         return;
     pending[pending_count++] = (struct input_event){ .type = type, .code = code, .value = value };
@@ -140,10 +150,24 @@ static int first_active(void);
 static int touch_sent;
 static uint64_t started_count;
 
+static int sent_down[MAX_SLOTS];
+
 static void
 flush(void)
 {
-    int down = first_active() >= 0;
+    int down = 0;
+
+    for (int i = 0, slot = sent_slot; i < pending_count; i++) {
+        if (pending[i].type != EV_ABS)
+            continue;
+        if (pending[i].code == ABS_MT_SLOT)
+            slot = pending[i].value;
+        else if (pending[i].code == ABS_MT_TRACKING_ID && slot >= 0 && slot < MAX_SLOTS)
+            sent_down[slot] = pending[i].value >= 0;
+        sent_slot = slot;
+    }
+    for (int slot = 0; slot < MAX_SLOTS; slot++)
+        down |= sent_down[slot];
 
     if (down != touch_sent) {
         queue(EV_KEY, BTN_TOUCH, down);
@@ -155,6 +179,7 @@ flush(void)
     if (write(output, pending, pending_count * sizeof(pending[0])) < 0)
         perror("wallview-touch: write");
     pending_count = 0;
+    frame_slot = -1;
 }
 
 static int
@@ -575,13 +600,15 @@ holds(int slot, int64_t time)
     const struct sample *last = &c->history[c->samples - 1];
     double speed = velocity(c, &c->vx, &c->vy);
     const struct sample *before = &c->history[c->samples - 2];
+    double move = hypot(last->x - before->x, last->y - before->y);
 
-    if (speed > 0 && c->vx == 0 && c->vy == 0 &&
-        hypot(last->x - before->x, last->y - before->y) >= opts->hold_travel) {
+    c->turned = 0;
+    if (speed > 0 && c->vx == 0 && c->vy == 0 && move >= opts->hold_travel) {
         double dt = (double)(last->time - before->time) / NSEC_PER_SEC;
 
         c->vx = (last->x - before->x) / dt;
         c->vy = (last->y - before->y) / dt;
+        c->turned = 1;
     }
     int age_ok = time - last->time <= opts->hold_recent;
     int hold = age_ok && (opts->hold_max_speed <= 0 || speed <= opts->hold_max_speed) &&
@@ -618,6 +645,7 @@ static void
 handle_frame(int64_t time)
 {
     int wake = 0;
+    int ending[MAX_SLOTS] = { 0 };
 
     for (int slot = 0; slot < MAX_SLOTS; slot++) {
         struct contact *c = &contacts[slot];
@@ -681,7 +709,7 @@ handle_frame(int64_t time)
                 c->release_at = time + opts->lift_hold;
                 c->dirty = 0;
             } else {
-                release(slot);
+                ending[slot] = 1;
             }
         } else if (c->dirty) {
             int64_t gap = c->samples ? time - c->history[c->samples - 1].time : 0;
@@ -707,6 +735,9 @@ handle_frame(int64_t time)
             add_sample(c, time);
         }
     }
+    for (int slot = 0; slot < MAX_SLOTS; slot++)
+        if (ending[slot] && contacts[slot].active)
+            release(slot);
     int down = 0;
 
     for (int slot = 0; slot < MAX_SLOTS; slot++)
@@ -738,7 +769,7 @@ coast(struct contact *c, const struct sample *last, int64_t target, int64_t step
 {
     double speed = sqrt(c->vx * c->vx + c->vy * c->vy);
 
-    if (opts->coast <= 0 || speed <= 0 || speed < opts->coast_speed || target <= last->time ||
+    if (opts->coast <= 0 || c->turned || speed <= 0 || speed < opts->coast_speed || target <= last->time ||
         c->lift_at - last->time > opts->coast_after)
         return 0;
     if (!c->coasting) {

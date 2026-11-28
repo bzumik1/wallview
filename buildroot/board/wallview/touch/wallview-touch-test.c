@@ -36,14 +36,18 @@ static void move(int64_t t, int sl, int x, int y) { s(t, sl); ev(t, EV_ABS, ABS_
 static void up(int64_t t, int sl) { s(t, sl); ev(t, EV_ABS, ABS_MT_TRACKING_ID, -1); ev(t, EV_SYN, SYN_REPORT, 0); }
 static struct input_event frame_events[1024];
 static int frame_len;
+static int mixed_frames;
 static void apply_frame(void) {
-	int ending[MAX_SLOTS] = { 0 }, sl = cur_slot;
+	int ending[MAX_SLOTS] = { 0 }, touched[MAX_SLOTS] = { 0 }, sl = cur_slot, transition = 0, slots = 0;
 	for (int i = 0; i < frame_len; i++) {
 		struct input_event *e = &frame_events[i];
 		if (e->type != EV_ABS) continue;
-		if (e->code == ABS_MT_SLOT) sl = e->value;
-		else if (e->code == ABS_MT_TRACKING_ID && e->value < 0 && sl >= 0 && sl < MAX_SLOTS) ending[sl] = 1;
+		if (e->code == ABS_MT_SLOT) { sl = e->value; continue; }
+		if (e->code == ABS_X || e->code == ABS_Y || sl < 0 || sl >= MAX_SLOTS) continue;
+		if (!touched[sl]) { touched[sl] = 1; slots++; }
+		if (e->code == ABS_MT_TRACKING_ID) { transition = 1; if (e->value < 0) ending[sl] = 1; }
 	}
+	if (transition && slots > 1) mixed_frames++;
 	for (int i = 0; i < frame_len; i++) {
 		struct input_event *e = &frame_events[i];
 		if (e->type != EV_ABS) continue;
@@ -351,6 +355,21 @@ int main(void) {
 	  t += 15 * MS; run_until(t); up(t, 0); drain(t); t += 45 * MS; run_until(t); down(t, 0, 64, 252, 240); drain(t);
 	  printf("false lift right after the finger turned back: downs %d ups %d\n", downs, ups); assert(downs == 1 && ups == 0);
 	  up(t + 20 * MS, 0); run_until(t + 400 * MS); t += 400 * MS; }
+
+	{ int worst = 0; int cases[][3] = { { 60, 20, 30 }, { 40, 15, 25 }, { 30, 12, 40 } };
+	  for (int k = 0; k < 3; k++) {
+	    reset(); t += 500 * MS; int px = 100; down(t, 0, 65, px, 240); drain(t);
+	    for (int i = 0; i < 4; i++) { t += 40 * MS; run_until(t); px += cases[k][0]; move(t, 0, px, 240); drain(t); }
+	    t += 40 * MS; run_until(t); px -= cases[k][1]; move(t, 0, px, 240); drain(t);
+	    t += cases[k][2] * MS; run_until(t); up(t, 0); drain(t); run_until(t + 400 * MS); t += 400 * MS;
+	    if (abs(outx[0] - px) > worst) worst = abs(outx[0] - px); }
+	  printf("real lift right after the finger turned back: released at most %d px from the finger\n", worst); assert(worst <= 3); }
+
+	{ reset(); t += 500 * MS; s(t, 0); ev(t, EV_ABS, ABS_MT_TRACKING_ID, 66); ev(t, EV_ABS, ABS_MT_POSITION_X, 100); ev(t, EV_ABS, ABS_MT_POSITION_Y, 100);
+	  s(t, 1); ev(t, EV_ABS, ABS_MT_TRACKING_ID, 67); ev(t, EV_ABS, ABS_MT_POSITION_X, 300); ev(t, EV_ABS, ABS_MT_POSITION_Y, 300); ev(t, EV_SYN, SYN_REPORT, 0); drain(t);
+	  for (int i = 1; i <= 4; i++) { t += 20 * MS; run_until(t); s(t, 0); ev(t, EV_ABS, ABS_MT_POSITION_X, 100 - 10 * i); s(t, 1); ev(t, EV_ABS, ABS_MT_POSITION_X, 300 + 10 * i); ev(t, EV_SYN, SYN_REPORT, 0); drain(t); }
+	  t += 20 * MS; run_until(t); s(t, 0); ev(t, EV_ABS, ABS_MT_TRACKING_ID, -1); s(t, 1); ev(t, EV_ABS, ABS_MT_TRACKING_ID, -1); ev(t, EV_SYN, SYN_REPORT, 0); drain(t); run_until(t + 300 * MS); t += 300 * MS; }
+	printf("frames that change a contact together with another slot: %d\n", mixed_frames); assert(mixed_frames == 0);
 
 	setenv("WALLVIEW_TOUCH_X", "1e13", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "nan", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
