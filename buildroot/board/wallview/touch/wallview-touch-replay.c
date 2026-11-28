@@ -218,7 +218,12 @@ main(int argc, char **argv)
     FILE *f = argc > 1 ? fopen(argv[1], "r") : NULL;
     char line[256];
     int cap = 1 << 16;
-    int hold_status = getenv("REPLAY_KEEP_UNPRESSED") != NULL;
+    const char *keep_env = getenv("REPLAY_KEEP_UNPRESSED");
+    int hold_status = keep_env && *keep_env;
+    const char *timeout_env = getenv("REPLAY_KEEP_TIMEOUT_MS");
+    int64_t keep_timeout = (timeout_env && *timeout_env ? atoll(timeout_env) : 110) * NSEC_PER_MSEC;
+    int kept = 0;
+    int64_t kept_at = 0;
 
     if (!f) {
         fprintf(stderr, "usage: wallview-touch-replay <touchprobe capture>\n");
@@ -234,11 +239,20 @@ main(int argc, char **argv)
             continue;
         if (nraw == cap)
             raws = realloc(raws, (cap *= 2) * sizeof(raws[0]));
-        if (count > 0 && id != 3 && hold_status && nraw && raws[nraw - 1].touch) {
+        if (kept && (int64_t)start > kept_at + keep_timeout) {
+            raws[nraw++] = (struct raw){ kept_at + keep_timeout, 0, 0, 0 };
+            kept = 0;
+            if (nraw == cap)
+                raws = realloc(raws, (cap *= 2) * sizeof(raws[0]));
+        }
+        if (count > 0 && id != 3 && hold_status && nraw && raws[nraw - 1].touch && kept < 2) {
             raws[nraw] = raws[nraw - 1];
             raws[nraw++].time = (int64_t)start;
+            kept++;
+            kept_at = (int64_t)start;
             continue;
         }
+        kept = 0;
         raws[nraw++] = (struct raw){ (int64_t)start, count > 0 && id == 3, (int)y, (int)x };
     }
     fclose(f);

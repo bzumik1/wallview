@@ -1,5 +1,5 @@
 diff --git a/drivers/input/touchscreen/hynitron_cstxxx.c b/drivers/input/touchscreen/hynitron_cstxxx.c
-index e7c2dcd..011fa18 100644
+index e7c2dcd..0ec80f9 100644
 --- a/drivers/input/touchscreen/hynitron_cstxxx.c
 +++ b/drivers/input/touchscreen/hynitron_cstxxx.c
 @@ -13,6 +13,7 @@
@@ -37,7 +37,7 @@ index e7c2dcd..011fa18 100644
  #define CST3XX_FIRMWARE_INFO_START_CMD		0x01d1
  #define CST3XX_FIRMWARE_INFO_END_CMD		0x09d1
 +#define CST3XX_MAX_UNPRESSED_FRAMES		2
-+#define CST3XX_KEEP_TIMEOUT_MS			60
++#define CST3XX_KEEP_TIMEOUT_MS			110
  #define CST3XX_FIRMWARE_CHK_CODE_REG		0xfcd1
  #define CST3XX_FIRMWARE_VERSION_REG		0x08d2
  #define CST3XX_FIRMWARE_VER_INVALID_VAL		0xa5a5a5a5
@@ -51,7 +51,7 @@ index e7c2dcd..011fa18 100644
  
  	return IRQ_HANDLED;
  }
-@@ -255,6 +266,75 @@ static void cst3xx_report_contact(struct hynitron_ts_data *ts_data,
+@@ -255,6 +266,78 @@ static void cst3xx_report_contact(struct hynitron_ts_data *ts_data,
  	input_report_abs(ts_data->input_dev, ABS_MT_TOUCH_MAJOR, w);
  }
  
@@ -70,7 +70,7 @@ index e7c2dcd..011fa18 100644
 +	input_mt_report_slot_state(ts_data->input_dev, MT_TOOL_FINGER, true);
 +}
 +
-+static void cst3xx_drop_kept(struct hynitron_ts_data *ts_data)
++static void cst3xx_drop_kept(struct hynitron_ts_data *ts_data, bool in_frame)
 +{
 +	struct input_mt *mt = ts_data->input_dev->mt;
 +	bool dropped = false;
@@ -88,7 +88,10 @@ index e7c2dcd..011fa18 100644
 +	}
 +
 +	if (dropped) {
-+		input_mt_report_pointer_emulation(ts_data->input_dev, false);
++		if (in_frame)
++			input_mt_sync_frame(ts_data->input_dev);
++		else
++			input_mt_report_pointer_emulation(ts_data->input_dev, false);
 +		input_sync(ts_data->input_dev);
 +	}
 +}
@@ -119,7 +122,7 @@ index e7c2dcd..011fa18 100644
 +			mod_delayed_work(system_percpu_wq, &ts_data->release_work,
 +					 deadline - now);
 +		else
-+			cst3xx_drop_kept(ts_data);
++			cst3xx_drop_kept(ts_data, false);
 +	}
 +	mutex_unlock(&ts_data->report_lock);
 +}
@@ -127,7 +130,7 @@ index e7c2dcd..011fa18 100644
  static int cst3xx_finish_touch_read(struct i2c_client *client)
  {
  	unsigned char buf[3];
-@@ -289,6 +369,7 @@ static int cst3xx_finish_touch_read(struct i2c_client *client)
+@@ -289,6 +372,7 @@ static int cst3xx_finish_touch_read(struct i2c_client *client)
  static void cst3xx_touch_report(struct i2c_client *client)
  {
  	struct hynitron_ts_data *ts_data = i2c_get_clientdata(client);
@@ -135,11 +138,11 @@ index e7c2dcd..011fa18 100644
  	u8 buf[28];
  	u8 finger_id, sw, w;
  	unsigned int x, y;
-@@ -305,18 +386,22 @@ static void cst3xx_touch_report(struct i2c_client *client)
+@@ -305,18 +389,22 @@ static void cst3xx_touch_report(struct i2c_client *client)
  	    buf[0] == CST3XX_TOUCH_DATA_CHK_VAL) {
  		dev_err(&client->dev, "cst3xx touch read failure\n");
  		cst3xx_finish_touch_read(client);
-+		cst3xx_drop_kept(ts_data);
++		cst3xx_drop_kept(ts_data, false);
  		return;
  	}
  
@@ -147,7 +150,7 @@ index e7c2dcd..011fa18 100644
  	err = cst3xx_finish_touch_read(client);
 -	if (err)
 +	if (err) {
-+		cst3xx_drop_kept(ts_data);
++		cst3xx_drop_kept(ts_data, false);
  		return;
 +	}
  
@@ -155,23 +158,23 @@ index e7c2dcd..011fa18 100644
  	if (touch_cnt > ts_data->chip->max_touch_num) {
  		dev_err(&client->dev, "cst3xx invalid touch count (%d vs %d max)\n",
  			touch_cnt, ts_data->chip->max_touch_num);
-+		cst3xx_drop_kept(ts_data);
++		cst3xx_drop_kept(ts_data, false);
  		return;
  	}
  
-@@ -329,6 +414,7 @@ static void cst3xx_touch_report(struct i2c_client *client)
+@@ -329,6 +417,7 @@ static void cst3xx_touch_report(struct i2c_client *client)
  		end_byte = touch_cnt * 5 + 2;
  		if (buf[end_byte] != CST3XX_TOUCH_DATA_CHK_VAL) {
  			dev_err(&client->dev, "cst3xx touch read failure\n");
-+			cst3xx_drop_kept(ts_data);
++			cst3xx_drop_kept(ts_data, false);
  			return;
  		}
  	}
-@@ -345,12 +431,17 @@ static void cst3xx_touch_report(struct i2c_client *client)
+@@ -345,12 +434,17 @@ static void cst3xx_touch_report(struct i2c_client *client)
  		if (finger_id >= ts_data->chip->max_touch_num) {
  			dev_err(&client->dev,
  				"cst3xx invalid finger id %d\n", finger_id);
-+			cst3xx_drop_kept(ts_data);
++			cst3xx_drop_kept(ts_data, i > 0);
  			return;
  		}
  
@@ -186,7 +189,7 @@ index e7c2dcd..011fa18 100644
  
  		idx += 5;
  
-@@ -361,6 +452,14 @@ static void cst3xx_touch_report(struct i2c_client *client)
+@@ -361,6 +455,14 @@ static void cst3xx_touch_report(struct i2c_client *client)
  
  	input_mt_sync_frame(ts_data->input_dev);
  	input_sync(ts_data->input_dev);
@@ -201,7 +204,7 @@ index e7c2dcd..011fa18 100644
  }
  
  static int cst3xx_input_dev_int(struct i2c_client *client)
-@@ -456,6 +555,15 @@ static int hyn_probe(struct i2c_client *client)
+@@ -456,6 +558,15 @@ static int hyn_probe(struct i2c_client *client)
  	if (err < 0)
  		return err;
  

@@ -51,6 +51,11 @@ int main(void) {
 	setvbuf(stdout, NULL, _IONBF, 0); if (pipe(pipefd) < 0) return 1; fcntl(pipefd[0], F_SETFL, O_NONBLOCK); output = pipefd[1];
 	timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK); defaults(); period = o.period; opts = &o;
 	assert(o.lift_hold == 80 * MS);
+	{ struct options d; load_options(&d);
+	  assert(d.period == o.period && d.latency == o.latency && d.max_prediction == o.max_prediction && d.max_sample_gap == o.max_sample_gap && d.lift_hold == o.lift_hold &&
+	         d.rejoin_min == o.rejoin_min && d.rejoin_slack == o.rejoin_slack && d.hold_travel == o.hold_travel && d.start_travel == o.start_travel && d.hold_speed == o.hold_speed &&
+	         d.start_speed == o.start_speed && d.hold_recent == o.hold_recent && d.coast == o.coast && d.coast_after == o.coast_after && d.coast_max == o.coast_max &&
+	         d.coast_speed == o.coast_speed && d.blend == o.blend && d.ease_min == o.ease_min && d.predict_travel == o.predict_travel); }
 	int64_t t = 1000 * MS; clock_t0 = t; double x, y;
 
 	reset(); x = 50; y = 240; down(t, 0, 1, 50, 240); drain(t);
@@ -128,9 +133,9 @@ int main(void) {
 	reset(); t += 500 * MS; x = 40; y = 240; down(t, 0, 18, 40, 240); drain(t);
 	t = drag(t, 0, &x, &y, 1500, 0, 6, 17 * MS);
 	int stop_x = (int)x; t += 90 * MS; run_until(t); up(t, 0); drain(t);
-	run_until(t + 50 * MS); int after_pause = outx[0];
-	run_until(t + 200 * MS);
-	printf("lift after pause: at %d, last %d, ups %d\n", after_pause, stop_x, ups); assert(ups == 1 && after_pause - stop_x <= 2);
+	{ int prev = outx[0], back = 0;
+	  for (int64_t u = t + 4 * MS; u <= t + 200 * MS; u += 4 * MS) { run_until(u); if (down_now[0] && prev - outx[0] > back) back = prev - outx[0]; prev = outx[0]; }
+	  printf("lift after pause: released at %d, last %d, ups %d, largest back step %d\n", outx[0], stop_x, ups, back); assert(ups == 1 && abs(outx[0] - stop_x) <= 2 && back <= 8); }
 
 	reset(); t += 500 * MS; down(t, 0, 19, 100, 100); drain(t); t += 30 * MS; run_until(t);
 	s(t, 0); ev(t, EV_ABS, ABS_MT_TRACKING_ID, -1); ev(t, EV_ABS, ABS_MT_TRACKING_ID, 20); ev(t, EV_ABS, ABS_MT_POSITION_X, 300); ev(t, EV_SYN, SYN_REPORT, 0); drain(t);

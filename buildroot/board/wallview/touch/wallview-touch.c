@@ -648,9 +648,10 @@ predict(const struct contact *c, const struct sample *last, int64_t target, int 
     int64_t ahead = age;
     int64_t limit = interval < opts->max_prediction ? interval : opts->max_prediction;
     int64_t ease_from = interval + interval / 2 > opts->ease_min ? interval + interval / 2 : opts->ease_min;
+    int64_t fade = 4 * (timer_armed == 2 ? frame : period);
 
-    if (ease_from > opts->max_sample_gap - 4 * period)
-        ease_from = opts->max_sample_gap - 4 * period;
+    if (ease_from > opts->max_sample_gap - fade)
+        ease_from = opts->max_sample_gap - fade;
     double vx, vy;
 
     if (interval > opts->max_sample_gap || age <= 0 || age > opts->max_sample_gap || c->reach < opts->predict_travel)
@@ -658,7 +659,7 @@ predict(const struct contact *c, const struct sample *last, int64_t target, int 
     if (ahead > limit)
         ahead = limit;
     if (age > ease_from) {
-        double keep = 1 - (double)(age - ease_from) / (double)(4 * period);
+        double keep = 1 - (double)(age - ease_from) / (double)fade;
 
         ahead = keep > 0 ? (int64_t)(ahead * keep) : 0;
     }
@@ -704,9 +705,11 @@ resample(const struct options *options, int64_t now)
                 }
             }
         } else {
-            if (c->releasing)
+            if (c->releasing) {
                 spent = coast(c, last, target, timer_armed == 2 ? frame : opts->period, &x, &y);
-            else if (c->samples >= 2)
+                if (!c->coasting && c->samples >= 2)
+                    predict(c, last, target, &x, &y);
+            } else if (c->samples >= 2)
                 predict(c, last, target, &x, &y);
             c->predicted = x != last->x || y != last->y;
         }
@@ -1049,16 +1052,8 @@ main(int argc, char **argv)
         while (read(input, stale, sizeof(stale)) > 0)
             ;
     }
-    load_positions();
-    for (int i = 0; i < MAX_SLOTS; i++)
-        contacts[i].dirty = 0;
-
     int slot = 0;
-    struct input_absinfo current_slot;
 
-    if (ioctl(input, EVIOCGABS(ABS_MT_SLOT), &current_slot) == 0 && current_slot.value >= 0 &&
-        current_slot.value < MAX_SLOTS)
-        slot = current_slot.value;
     output = create_output(input);
     if (output < 0) {
         fprintf(stderr, "wallview-touch: uinput: %s\n", strerror(errno));
@@ -1101,6 +1096,7 @@ main(int argc, char **argv)
 
     struct pollfd fds[4] = { { input, POLLIN, 0 }, { timer, POLLIN, 0 }, { -1, POLLIN, 0 }, { phase_timer, POLLIN, 0 } };
 
+    resync(now_ns(), &slot);
     open_drm();
     while (!stopping) {
         fds[2].fd = drm;
