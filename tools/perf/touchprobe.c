@@ -93,7 +93,7 @@ int
 main(int argc, char **argv)
 {
     if (argc < 5) {
-        fprintf(stderr, "usage: touchprobe <i2c-dev> <gpiochip> <line> <seconds> [level|poll<ms>] [ack|noack] [counter<ms>]\n");
+        fprintf(stderr, "usage: touchprobe <i2c-dev> <gpiochip> <line> <seconds> [level|poll<ms>] [ack|noack] [counter<ms>] [mode06|mode09]\n");
         return 1;
     }
 
@@ -101,6 +101,7 @@ main(int argc, char **argv)
     int acknowledge = argc > 6 ? strcmp(argv[6], "noack") != 0 : 1;
     int counter_ms = argc > 7 && !strncmp(argv[7], "counter", 7) ? atoi(argv[7] + 7) : 0;
     uint64_t next_counter = now_ns();
+    int mode_command = argc > 8 && !strncmp(argv[8], "mode", 4) ? (int)strtol(argv[8] + 4, NULL, 16) : -1;
     uint64_t end = now_ns() + strtoull(argv[4], NULL, 10) * 1000000000ull;
 
     i2c = open(argv[1], O_RDWR);
@@ -122,6 +123,12 @@ main(int argc, char **argv)
     }
 
     setvbuf(stdout, NULL, _IOFBF, 1 << 20);
+    if (mode_command == 0x06 || mode_command == 0x09) {
+        uint8_t cmd[2] = { 0xd1, (uint8_t)mode_command };
+        struct i2c_msg msg = { TOUCH_ADDR, 0, sizeof(cmd), cmd };
+        int rc = transfer(&msg, 1);
+        printf("M %llu %02x %d\n", (unsigned long long)now_ns(), mode_command, rc == 0);
+    }
     int poll_ms = !strncmp(mode, "poll", 4) ? atoi(mode + 4) : 0;
     uint64_t next_poll = now_ns();
     int level = 1;
