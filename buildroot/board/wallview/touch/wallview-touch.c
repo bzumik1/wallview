@@ -87,6 +87,7 @@ struct options {
     double coast_speed;
     double blend;
     int64_t ease_min;
+    int64_t gap_blend;
     int predict_travel;
     int debug;
     int vblank;
@@ -533,6 +534,9 @@ holds(int slot, int64_t time)
         return 0;
     if (c->multi)
         return 0;
+    for (int other = 0; other < MAX_SLOTS; other++)
+        if (other != slot && contacts[other].active && !contacts[other].releasing)
+            return 0;
     const struct sample *last = &c->history[c->samples - 1];
     double speed = velocity(c, &c->vx, &c->vy);
     int age_ok = time - last->time <= opts->hold_recent;
@@ -631,8 +635,12 @@ handle_frame(int64_t time)
                 release(slot);
             }
         } else if (c->dirty) {
+            int64_t gap = c->samples ? time - c->history[c->samples - 1].time : 0;
+
             c->dirty = 0;
             c->fresh = 1;
+            if (gap > opts->hold_recent && gap < opts->gap_blend)
+                c->blend = 1;
             add_sample(c, time);
         }
     }
@@ -1029,6 +1037,7 @@ load_options(struct options *options)
         .coast_speed = env_number("WALLVIEW_TOUCH_COAST_PX_PER_S", 150),
         .blend = env_number("WALLVIEW_TOUCH_BLEND", 0.7),
         .ease_min = env_ms("WALLVIEW_TOUCH_PREDICT_EASE_MS", 100),
+        .gap_blend = env_ms("WALLVIEW_TOUCH_GAP_BLEND_MS", 280),
         .predict_travel = (int)env_number("WALLVIEW_TOUCH_PREDICT_TRAVEL_PX", 6),
         .debug = (int)env_number("WALLVIEW_TOUCH_DEBUG", 0),
         .vblank = (int)env_number("WALLVIEW_TOUCH_VBLANK", 0),
