@@ -41,14 +41,14 @@ static void defaults(void) {
 	setenv("WALLVIEW_TOUCH_LIFT_MS", "", 1);
 	o = (struct options){ .period = NSEC_PER_SEC / 120, .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 16), .max_prediction = 30 * MS, .max_sample_gap = 150 * MS,
 		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 12, .start_travel = 8, .hold_speed = 60, .start_speed = 150,
-		.hold_recent = 100 * MS, .coast = 250 * MS, .coast_after = 85 * MS, .coast_max = 80, .coast_speed = 150, .blend = 0.7, .predict_travel = 6, .debug = getenv("DBG") != NULL };
+		.hold_recent = 100 * MS, .coast = 250 * MS, .coast_after = 85 * MS, .coast_max = 80, .coast_speed = 150, .blend = 0.7, .ease_min = 100 * MS, .predict_travel = 6, .debug = getenv("DBG") != NULL };
 }
 static int64_t drag(int64_t t, int sl, double *x, double *y, double vx, double vy, int n, int64_t dt) {
 	for (int i = 0; i < n; i++) { t += dt; run_until(t); *x += vx * dt / NSEC_PER_SEC; *y += vy * dt / NSEC_PER_SEC; move(t, sl, (int)*x, (int)*y); drain(t); }
 	return t;
 }
 int main(void) {
-	setvbuf(stdout, NULL, _IONBF, 0); pipe(pipefd); fcntl(pipefd[0], F_SETFL, O_NONBLOCK); output = pipefd[1];
+	setvbuf(stdout, NULL, _IONBF, 0); if (pipe(pipefd) < 0) return 1; fcntl(pipefd[0], F_SETFL, O_NONBLOCK); output = pipefd[1];
 	timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK); defaults(); period = o.period; opts = &o;
 	assert(o.lift_hold == 80 * MS);
 	int64_t t = 1000 * MS; clock_t0 = t; double x, y;

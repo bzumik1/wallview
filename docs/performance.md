@@ -106,8 +106,8 @@ The controller firmware, its update protocol and what it would take to raise the
 - **How long.** `WALLVIEW_TOUCH_LIFT_MS` (default 80; `/data/wallview/touch-lift-ms` overrides it, 0 turns bridging off).
 - **Rejoin.** A new contact in the same slot rejoins the touch when it lands within `WALLVIEW_TOUCH_REJOIN_PX` (default 30) plus `WALLVIEW_TOUCH_REJOIN_SLACK` (default 0.75) times speed times elapsed time of the position predicted from the lift velocity, and not more than `REJOIN_PX` behind the last sample along the stroke. Anything else is a new touch, and the held release is sent first in its own frame.
 - **Coasting.** While a lift is held, the output keeps interpolating up to the last real sample, then glides on from the position already shown at the lift velocity with an exponential stop, `WALLVIEW_TOUCH_COAST_MS` (default 250, close to the browser's kinetic scroll friction so the glide matches the fling that follows) time constant and at most `WALLVIEW_TOUCH_COAST_PX` (default 80) px, only above `WALLVIEW_TOUCH_COAST_PX_PER_S` (default 150) and only when the lift came at most `WALLVIEW_TOUCH_COAST_AFTER_MS` (default 85, because with kernel patch 0006 a real lift reaches evdev 50–78 ms after the last coordinate change) after the last sample, so a finger that stopped before lifting does not jump forward. When the glide reaches `COAST_PX` or the screen edge the contact is released at once instead of waiting for the hold to expire, so a fast flick lets go after 30–50 ms. On rejoin the difference to the real path decays by `WALLVIEW_TOUCH_BLEND` (default 0.7) per tick instead of jumping. A real lift releases at the coasted position, with no step back.
-- **Prediction.** Velocity is a least-squares fit over the last three samples (each gap at most `WALLVIEW_TOUCH_MAX_GAP_MS`, default 150). Prediction is capped at the smaller of `WALLVIEW_TOUCH_PREDICTION_MS` (default 30) and the last sample interval, and fades out over four ticks once no sample came for 1.5 intervals, so a stopping finger does not snap back.
-- **No prediction for a resting finger.** Prediction starts only after the contact has travelled `WALLVIEW_TOUCH_PREDICT_TRAVEL_PX` (default 6) from where it went down, which halves tap and long-press jitter (2.8 to 1.4 px in the replay). `WALLVIEW_TOUCH_PREDICT_EASE_MS` (default 0) delays the prediction fade for an A/B test.
+- **Prediction.** Velocity is a least-squares fit over the last three samples (each gap at most `WALLVIEW_TOUCH_MAX_GAP_MS`, default 150). Prediction is capped at the smaller of `WALLVIEW_TOUCH_PREDICTION_MS` (default 30) and the last sample interval, and fades out over four ticks once no sample came for 1.5 intervals or `WALLVIEW_TOUCH_PREDICT_EASE_MS` (default 100), whichever is longer, so a stopping finger does not snap back. The fade always ends four ticks before `MAX_GAP_MS`, where prediction stops: before that clamp a prediction still at full length was dropped in one tick and the output stepped back.
+- **No prediction for a resting finger.** Prediction starts only after the contact has travelled `WALLVIEW_TOUCH_PREDICT_TRAVEL_PX` (default 6) from where it went down, which halves tap and long-press jitter (2.8 to 1.4 px in the replay).
 - **Idle cost.** With no finger the daemon has no timer and sleeps in `poll`. A finger that rests (no new coordinates for longer than `MAX_GAP_MS`, no hold, no blend) also stops the timer until the next event (40 % fewer ticks on the capture, identical output). The code is locked in memory (`mlockall`) so the first touch after a long idle never waits for page faults, and a failure to get `SCHED_FIFO` is logged.
 - **Start and stop.** The daemon grabs the touchscreen only while no finger is down (it waits up to 30 s), because a grab during a touch leaves the browser with a contact that never lifts. On `SIGTERM` or a lost input device it releases every contact it reports before destroying the virtual device; the signals are only unblocked inside `ppoll`, so a stop request cannot be missed while the daemon sleeps.
 - **Display-locked output (issue #25, off by default).** `WALLVIEW_TOUCH_VBLANK=1` resamples once per display refresh instead of on its own 120 Hz timer, the way Android's input consumer is driven by the display: while a finger is down it queues a DRM vblank event on `WALLVIEW_TOUCH_DRM` (default `/dev/dri/card0`) and resamples `WALLVIEW_TOUCH_VBLANK_OFFSET_MS` (default 10) after each vblank, so the new position is in the browser's queue several milliseconds before it starts the next frame instead of racing its page-flip event. The frame length is measured from the vblank timestamps (it locks between about 40 and 120 Hz, seeded at 60 Hz); the lift-blend decay is scaled to it. A timer at three frames keeps output going if vblank events stop, and with the display off it falls back to the 120 Hz timer.
@@ -180,7 +180,7 @@ Read from AOSP `frameworks/native` (main): `libs/input/InputConsumer.cpp`, `libs
 | Sample time | frame time − 5 ms (`RESAMPLE_LATENCY`) | tick − 16 ms (`LATENCY_MS`) |
 | Interpolation | between the two samples around the sample time, skipped if they are < 2 ms apart | same, between coordinate changes |
 | Extrapolation | last two samples, only if 2–20 ms apart, at most min(gap / 2, 8 ms) | least-squares velocity over up to 3 samples ≤ 150 ms apart, at most min(gap, 30 ms), faded out after 1.5 × gap |
-| Lifts | passed through at once; `MultiTouchInputMapper` releases a slot in the same sync, no debounce | lifts of a moving finger held up to 100 ms and rejoined near the predicted position |
+| Lifts | passed through at once; `MultiTouchInputMapper` releases a slot in the same sync, no debounce | lifts of a moving finger held up to 80 ms and rejoined near the predicted position |
 | After a gap | nothing | coasting with exponential stop, blend back onto the real path |
 | New sample behind the last resampled one | replaced by the resampled position (`rewriteMessage`) | blend offset decays per tick |
 
@@ -190,12 +190,15 @@ Android's limits assume a controller reporting every 4–10 ms. This controller 
 
 | | Android-like | defaults |
 |---|---|---|
-| Output touch-downs (raw 81) | 81 | 76 |
-| Stalls | 1793 | 259 |
-| Jerks | 1142 | 550 |
-| Max step | 146 px | 104 px |
-| Path error p50 / p95 | 8.0 / 36.8 px | 7.0 / 32.1 px |
-| Release after last sample p50 / max | 23 / 27 ms | 27 / 134 ms |
+| Output touch-downs (raw 81) | 81 | 77 |
+| Ticks while down | 2059 | 4610 |
+| Stalls | 874 | 406 |
+| Jerks | 1132 | 499 |
+| Max step | 146 px | 98 px |
+| Path error p50 / p95 | 4.4 / 21.5 px | 6.8 / 30.6 px |
+| Release after last sample p50 / max | 23 / 27 ms | 27 / 114 ms |
+
+Numbers from the code after the fourth audit (2026-11-28), without patch 0006. Path error is measured only on ticks while the output is down; the Android-like run releases at every false lift and so leaves out the gaps, where the error of a bridged stroke is largest, which is why its path error is lower although it shows the browser 4 extra touch-downs and five times the stalls per tick down.
 
 ### wallview-touch audit (2026-11-28)
 
@@ -208,4 +211,12 @@ Three independent reviews (Fable 5.2: correctness with a 200,000-frame fuzzer un
 - `EVIOCGMTSLOTS` fills only the device's 5 slots; the other 5 kept tracking id 0, so a resync after `SYN_DROPPED` started phantom contacts at 0,0 (found by the audit run on the Mac, `docs/touch-audit-mac-2026-11-28.md` on `claude/project-thread-3bjdnn`). Tracking ids are now prefilled with −1. A read error other than `EAGAIN` on the DRM node closes it instead of spinning.
 - Efficiency: the timer stops for a resting finger, input and vblank reads stop at a short read, the `/proc` scan for vblank mode runs only while no finger is down (never on the touch path), and a pending phase timer is cancelled whenever the vblank mode is left.
 
-Replay of `touch-raw-2026-11-27.txt` with `REPLAY_KEEP_UNPRESSED=1` (patch 0006, without its 60 ms timer): 64 output downs, path error p50/p95 7.3/35.3 px, max step 104 px, jerks 613 (659 before), stalls 310 (291 before; more because of the travel threshold). Without the patch: 77 downs, jerks 543, stalls 278. Not changed: `ABS_MT_TOUCH_MAJOR` is still sent only at touch-down, and `ABS_X`/`ABS_Y` single-touch emulation is still written.
+Replay of `touch-raw-2026-11-27.txt` with `REPLAY_KEEP_UNPRESSED=1` (patch 0006, without its 60 ms timer): 64 output downs, path error p50/p95 7.3/35.3 px, max step 104 px, jerks 613 (659 before), stalls 310 (291 before; more because of the travel threshold). Without the patch: 77 downs, jerks 543, stalls 278.
+
+Fourth review (Fable 5.2, same three angles plus a `SYN_DROPPED` harness) of the result above. Applied:
+
+- Resync after `SYN_DROPPED` ran inside the event handler at the first `SYN_REPORT` after the drop, while the rest of the stale queue was still unread; that queue could then re-apply an old touch-down as a new contact (a phantom tap) or lift a finger that was still down. The daemon now ignores every event after the drop, empties the queue and reads the slot state once, after the queue is empty. Harness: one finger held across the drop stays down with no extra tap; a resting second finger stays down while the first one taps during the stall.
+- A repeated `ABS_MT_TRACKING_ID` with the id the slot already has (sent again after a resync) no longer restarts the contact.
+- Prediction fade: `PREDICT_EASE_MS` default 0 to 100, clamped so the fade ends before `MAX_GAP_MS` (see Prediction above). Replay with patch 0006: path error p95 35.3 to 33.8 px, max step 104 to 98 px, jerks 613 to 573, stalls 310 to 437. The extra stalls are ticks where the output, already ahead of the finger by the prediction, waits for it instead of stepping back; a pause reads as smoother than a back-step, so the trade was taken. `WALLVIEW_TOUCH_PREDICT_EASE_MS=0` restores the old fade for an A/B on the panel.
+- Option values from an environment file with CRLF line ends are accepted instead of ignored.
+- 200,000-frame fuzzer after the changes: no invariant violations, no stuck or lost contacts. Not changed: `ABS_MT_TOUCH_MAJOR` is still sent only at touch-down, and `ABS_X`/`ABS_Y` single-touch emulation is still written.

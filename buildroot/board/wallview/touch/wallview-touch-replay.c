@@ -251,7 +251,8 @@ main(int argc, char **argv)
     options.vblank = 0;
     opts = &options;
     period = options.period;
-    pipe(pipe_out);
+    if (pipe(pipe_out) < 0)
+        return 1;
     fcntl(pipe_out[0], F_SETFL, O_NONBLOCK);
     fcntl(pipe_out[1], F_SETFL, O_NONBLOCK);
     output = pipe_out[1];

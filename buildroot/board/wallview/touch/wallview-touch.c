@@ -648,6 +648,9 @@ predict(const struct contact *c, const struct sample *last, int64_t target, int 
     int64_t ahead = age;
     int64_t limit = interval < opts->max_prediction ? interval : opts->max_prediction;
     int64_t ease_from = interval + interval / 2 > opts->ease_min ? interval + interval / 2 : opts->ease_min;
+
+    if (ease_from > opts->max_sample_gap - 4 * period)
+        ease_from = opts->max_sample_gap - 4 * period;
     double vx, vy;
 
     if (interval > opts->max_sample_gap || age <= 0 || age > opts->max_sample_gap || c->reach < opts->predict_travel)
@@ -810,13 +813,8 @@ handle_event(const struct input_event *event, int *slot)
         dropped = 1;
         return;
     }
-    if (dropped) {
-        if (event->type == EV_SYN && event->code == SYN_REPORT) {
-            dropped = 0;
-            resync(time, slot);
-        }
+    if (dropped)
         return;
-    }
     if (event->type == EV_ABS) {
         if (event->code == ABS_MT_SLOT) {
             *slot = event->value >= 0 && event->value < MAX_SLOTS ? event->value : -1;
@@ -829,7 +827,7 @@ handle_event(const struct input_event *event, int *slot)
             if (event->value < 0) {
                 c->ended = c->active || c->started;
                 c->started = 0;
-            } else {
+            } else if (!(c->active && !c->releasing && c->tracking_id == event->value)) {
                 c->tracking_id = event->value;
                 c->started = 1;
                 c->ended = 0;
@@ -928,7 +926,7 @@ env_number(const char *name, double fallback)
     if (!value || !*value)
         return fallback;
     number = strtod(value, &end);
-    while (*end == ' ' || *end == '\n' || *end == '\t')
+    while (*end == ' ' || *end == '\n' || *end == '\t' || *end == '\r')
         end++;
     if (*end || !isfinite(number) || number < 0 || number > 1e6) {
         fprintf(stderr, "wallview-touch: ignoring %s=%s\n", name, value);
@@ -967,7 +965,7 @@ load_options(struct options *options)
         .coast_max = (int)env_number("WALLVIEW_TOUCH_COAST_PX", 80),
         .coast_speed = env_number("WALLVIEW_TOUCH_COAST_PX_PER_S", 150),
         .blend = env_number("WALLVIEW_TOUCH_BLEND", 0.7),
-        .ease_min = env_ms("WALLVIEW_TOUCH_PREDICT_EASE_MS", 0),
+        .ease_min = env_ms("WALLVIEW_TOUCH_PREDICT_EASE_MS", 100),
         .predict_travel = (int)env_number("WALLVIEW_TOUCH_PREDICT_TRAVEL_PX", 6),
         .debug = (int)env_number("WALLVIEW_TOUCH_DEBUG", 0),
         .vblank = (int)env_number("WALLVIEW_TOUCH_VBLANK", 0),
@@ -1122,6 +1120,12 @@ main(int argc, char **argv)
                     handle_event(&events[i], &slot);
                 if ((size_t)size < sizeof(events))
                     break;
+            }
+            if (dropped) {
+                while (read(input, events, sizeof(events)) > 0)
+                    ;
+                dropped = 0;
+                resync(now_ns(), &slot);
             }
         }
         int handled = 0;
