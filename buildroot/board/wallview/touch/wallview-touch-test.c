@@ -226,6 +226,17 @@ int main(void) {
 	      cases++; merged += downs < 2; }
 	  printf("second tap beside, behind or on the down point of a slid first tap that went back 0-7 px (%d cases): merged %d\n", cases, merged); assert(merged == 0); }
 
+	{ static const int paths[][3] = { { 208, 205, 202 }, { 208, 204, 200 }, { 210, 206, 202 }, { 206, 203, 200 }, { 209, 206, 203 } };
+	  int merged = 0, cases = 0;
+	  for (int p = 0; p < 5; p++) for (int land = 194; land <= 200; land += 3) for (int gap = 20; gap <= 70; gap += 25) {
+	      reset(); t += 500 * MS; down(t, 0, 80, 200, 240); drain(t);
+	      for (int i = 0; i < 3; i++) { t += 20 * MS; run_until(t); move(t, 0, paths[p][i], 240); drain(t); }
+	      up(t, 0); drain(t);
+	      t += gap * MS; run_until(t); down(t, 0, 81, land, 240); drain(t);
+	      t += 30 * MS; run_until(t); up(t, 0); drain(t); run_until(t + 400 * MS); t += 400 * MS;
+	      cases++; merged += downs < 2; }
+	  printf("second tap on or behind the down point of a tap that slid back in small steps (%d cases): merged %d\n", cases, merged); assert(merged == 0); }
+
 	{ int64_t late[2];
 	  for (int k = 0; k < 2; k++) {
 	      o.tap_hold = k ? 30 * MS : o.lift_hold;

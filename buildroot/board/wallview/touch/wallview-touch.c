@@ -584,7 +584,7 @@ rejoins(int slot, int64_t time)
     double along = norm > 0 && (speed > 0 || tap) ? ((c->x - last->x) * ux + (c->y - last->y) * uy) / norm : 0;
     double side = norm > 0 ? fabs((c->x - last->x) * uy - (c->y - last->y) * ux) / norm : hypot(c->x - last->x, c->y - last->y);
     int ok = dx * dx + dy * dy <= limit * limit &&
-             (tap ? along >= -1 && side <= 4 + 0.5 * along : along >= -opts->rejoin_min);
+             (tap ? along >= -1 && side <= 4 + along : along >= -opts->rejoin_min);
 
     if (opts->debug)
         fprintf(stderr, "wallview-touch: %s slot %d after %.0f ms, off %.0f px, limit %.0f px, along %.0f px\n",
@@ -618,7 +618,10 @@ holds(int slot, int64_t time)
         c->turned = 1;
     }
     int age_ok = time - last->time <= opts->hold_recent;
-    int hold = age_ok && !(c->turned && c->reach < opts->predict_travel) && (opts->hold_max_speed <= 0 || speed <= opts->hold_max_speed) &&
+    int back = c->reach < opts->predict_travel &&
+               (c->turned || hypot(last->x - c->origin_x, last->y - c->origin_y) <
+                                 hypot(before->x - c->origin_x, before->y - c->origin_y));
+    int hold = age_ok && !back && (opts->hold_max_speed <= 0 || speed <= opts->hold_max_speed) &&
                ((c->reach >= opts->start_travel && speed >= opts->start_speed) ||
                 (c->moved && speed >= opts->hold_speed));
 
