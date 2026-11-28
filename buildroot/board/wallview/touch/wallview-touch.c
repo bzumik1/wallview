@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -615,6 +616,7 @@ coast(struct contact *c, const struct sample *last, int64_t target, int64_t step
     if (!c->coasting) {
         c->coasting = 1;
         if (c->emitted_x >= 0) {
+            c->offset_x = c->offset_y = 0;
             c->coast_x = c->emitted_x;
             c->coast_y = c->emitted_y;
             c->coast_at = target - step;
@@ -1072,6 +1074,13 @@ main(int argc, char **argv)
     if (mlockall(MCL_CURRENT | MCL_FUTURE) < 0)
         fprintf(stderr, "wallview-touch: mlockall: %s\n", strerror(errno));
 
+    sigset_t blocked, unblocked;
+
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGTERM);
+    sigaddset(&blocked, SIGINT);
+    sigprocmask(SIG_BLOCK, &blocked, &unblocked);
+
     struct sigaction action = { .sa_handler = stop };
 
     sigemptyset(&action.sa_mask);
@@ -1097,7 +1106,7 @@ main(int argc, char **argv)
     open_drm();
     while (!stopping) {
         fds[2].fd = drm;
-        if (poll(fds, 4, -1) < 0) {
+        if (ppoll(fds, 4, NULL, &unblocked) < 0) {
             if (errno == EINTR)
                 continue;
             return finish(1);
@@ -1114,8 +1123,6 @@ main(int argc, char **argv)
                 if ((size_t)size < sizeof(events))
                     break;
             }
-            if (first_active() < 0)
-                open_drm();
         }
         int handled = 0;
 
@@ -1152,6 +1159,8 @@ main(int argc, char **argv)
                 resample(&options, now_ns());
             }
         }
+        if (first_active() < 0)
+            open_drm();
     }
     return finish(0);
 }

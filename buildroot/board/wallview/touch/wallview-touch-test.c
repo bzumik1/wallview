@@ -137,6 +137,14 @@ int main(void) {
 	printf("lift and land in one frame: downs %d ups %d\n", downs, ups); assert(downs == 2 && ups == 1);
 	up(t + 20 * MS, 0); run_until(t + 200 * MS);
 
+	reset(); t += 500 * MS; x = 40; y = 240; down(t, 0, 23, 40, 240); drain(t);
+	t = drag(t, 0, &x, &y, 3000, 0, 4, 17 * MS);
+	run_until(t + 17 * MS); up(t + 17 * MS, 0); drain(t);
+	t += 74 * MS; run_until(t); down(t, 0, 24, (int)(x + 3000 * 0.074), 240); drain(t); run_until(t + 20 * MS);
+	printf("very fast flick released when the glide is spent: downs %d ups %d\n", downs, ups);
+	assert(downs == 2 && ups == 1);
+	up(t + 20 * MS, 0); run_until(t + 200 * MS);
+
 	reset(); t += 500 * MS; clock_t0 = t - 7 * MS; down(t, 0, 21, 100, 240); drain(t);
 	{ int prev = 100, back = 0; move(t + 13 * MS, 0, 120, 240); drain(t + 13 * MS);
 	  for (int i = 0; i < 8; i++) { run_until(t + 13 * MS + (i + 1) * 4 * MS); if (outx[0] < prev) back = 1; prev = outx[0]; if (i == 3) { move(t + 39 * MS, 0, 140, 240); drain(t + 39 * MS); } }
