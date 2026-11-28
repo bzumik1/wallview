@@ -305,6 +305,29 @@ int main(void) {
 	  run_until(a + 185 * MS); up(a + 185 * MS, 0); drain(a + 185 * MS); run_until(a + 600 * MS);
 	  printf("held lift during a gap blend: released at %d, last sample 466\n", outx[0]); assert(outx[0] >= 466); t = a + 600 * MS; }
 
+	{ reset(); t += 500 * MS; int xs[] = { 100, 120, 140, 155, 162, 160 }; down(t, 0, 58, 100, 240); drain(t);
+	  for (int i = 1; i < 6; i++) { t += 30 * MS; run_until(t); move(t, 0, xs[i], 240); drain(t); }
+	  t += 20 * MS; run_until(t); up(t, 0); drain(t); t += 40 * MS; run_until(t); down(t, 0, 59, 161, 240); drain(t);
+	  printf("drag settling with 2 px jitter, then a false lift: downs %d ups %d\n", downs, ups); assert(downs == 1 && ups == 0);
+	  up(t + 20 * MS, 0); run_until(t + 400 * MS); t += 400 * MS; }
+	{ int worst = 0;
+	  for (int ph = 0; ph < 33; ph++) {
+	    reset(); t += 500 * MS + ph * MS / 3; int px = 100; down(t, 0, 60, 100, 240); drain(t);
+	    t += 33 * MS; run_until(t); px -= 3; move(t, 0, px, 240); drain(t);
+	    for (int i = 0; i < 12; i++) { t += 33 * MS; run_until(t); px += 4; move(t, 0, px, 240); drain(t); }
+	    t += ph * MS; run_until(t); int pre = outx[0]; up(t, 0); drain(t); run_until(t + 300 * MS);
+	    if (pre - outx[0] > worst) { worst = pre - outx[0]; }
+	    t += 300 * MS; }
+	  printf("slow drag after a 3 px roll back at touch-down: worst release back-step %d px\n", worst); assert(worst <= 1); }
+
+	{ int bad = 0, n = 0;
+	  for (int after = 0; after <= 8; after += 2, n++) {
+	    reset(); t += 600 * MS; run_until(t); x = 20; y = 240; down(t, 1, 61, 400, 100); drain(t); down(t, 0, 62, 20, 240); drain(t);
+	    t = drag(t, 0, &x, &y, 1500, 0, 3, 50 * MS); t += 50 * MS; run_until(t); move(t, 0, (int)x, 240); drain(t);
+	    run_until(t + after * MS); up(t + after * MS, 0); drain(t + after * MS); if (abs(outx[0] - (int)x) > 3) bad++;
+	    up(t + after * MS + 5 * MS, 1); run_until(t + 200 * MS); t += 200 * MS; }
+	  printf("second finger resting, first stops and lifts within a tick: %d of %d released off the finger\n", bad, n); assert(!bad); }
+
 	setenv("WALLVIEW_TOUCH_X", "1e13", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "nan", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "abc", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);

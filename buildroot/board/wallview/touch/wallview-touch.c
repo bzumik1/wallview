@@ -460,8 +460,10 @@ velocity(const struct contact *c, double *vx, double *vy)
     *vx = stx / stt;
     *vy = sty / stt;
     if (n > 2 && *vx * (s[n - 1].x - s[n - 2].x) + *vy * (s[n - 1].y - s[n - 2].y) < 0) {
+        double speed = sqrt(*vx * *vx + *vy * *vy);
+
         *vx = *vy = 0;
-        return 0;
+        return speed;
     }
     return sqrt(*vx * *vx + *vy * *vy);
 }
@@ -507,7 +509,10 @@ release(int slot)
 
     c->releasing = 0;
     c->coasting = 0;
-    if (last && (blended || c->predicted ? !ahead : 1))
+    int decelerated = c->fresh && !blended && prev &&
+        (last->x - prev->x) * dx + (last->y - prev->y) * dy < (c->emitted_x - last->x) * dx + (c->emitted_y - last->y) * dy;
+
+    if (last && (blended || c->predicted ? !ahead || decelerated : 1))
         emit_position(slot, clamp(last->x, min_x, max_x), clamp(last->y, min_y, max_y));
     c->fresh = 0;
     c->blend = 0;
@@ -673,7 +678,11 @@ handle_frame(int64_t time)
                 c->blend = 1;
             double mx = c->x - last_x, my = c->y - last_y;
 
-            if ((mx != 0 || my != 0) && (mx * c->dir_x + my * c->dir_y >= 0 || mx * mx + my * my > 16)) {
+            int n = c->samples;
+            double px = n >= 2 ? c->history[n - 1].x - c->history[n - 2].x : 0;
+            double py = n >= 2 ? c->history[n - 1].y - c->history[n - 2].y : 0;
+
+            if ((mx != 0 || my != 0) && (mx * c->dir_x + my * c->dir_y >= 0 || mx * mx + my * my > 16 || mx * px + my * py > 0)) {
                 c->dir_x = mx;
                 c->dir_y = my;
             }
