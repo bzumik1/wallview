@@ -1,0 +1,324 @@
+title: WallView dotyk
+views:
+- title: Ovládání
+  path: ovladani
+  type: sections
+  max_columns: 2
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Světla
+    - type: tile
+      entity: light.wvtt_light
+      grid_options:
+        columns: 12
+      features:
+      - type: light-brightness
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+      grid_options:
+        columns: 12
+      features:
+      - type: cover-open-close
+      - type: cover-position
+  - type: grid
+    cards:
+    - type: heading
+      heading: Klima a barvy
+    - type: thermostat
+      entity: climate.test_termostat
+      grid_options:
+        columns: 12
+    - type: light
+      entity: light.wvtt_light
+      grid_options:
+        columns: 6
+    - type: button
+      entity: input_boolean.wvtt_plug
+      name: Ťuk / dvojťuk / dlouze
+      tap_action:
+        action: toggle
+      double_tap_action:
+        action: more-info
+      hold_action:
+        action: more-info
+      grid_options:
+        columns: 6
+- title: Posuvníky
+  path: posuvniky
+  type: sections
+  max_columns: 2
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Posuvníky
+    - type: entities
+      entities:
+      - input_number.wvtt_brightness
+      - input_number.wvtt_cover
+      - input_number.wvtt_temperature
+      - input_number.wvtt_hue
+      - input_number.wvtt_saturation
+      grid_options:
+        columns: 12
+    - type: tile
+      entity: climate.test_termostat
+      grid_options:
+        columns: 12
+      features:
+      - type: target-temperature
+- title: Seznam
+  path: seznam
+  type: sections
+  max_columns: 1
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 1
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 2
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 3
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 4
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 5
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 6
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 7
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 8
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 9
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 10
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 11
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo
+  - type: grid
+    cards:
+    - type: heading
+      heading: Skupina 12
+    - type: tile
+      entity: light.wvtt_light
+    - type: tile
+      entity: input_boolean.wvtt_light_2
+    - type: tile
+      entity: input_boolean.wvtt_plug
+    - type: tile
+      entity: input_boolean.wvtt_fan
+    - type: tile
+      entity: input_boolean.wvtt_heater
+    - type: tile
+      entity: cover.wvtt_cover
+    - type: tile
+      entity: climate.test_termostat
+    - type: tile
+      entity: sensor.test_teplota_cidlo

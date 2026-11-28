@@ -4,13 +4,23 @@ PIDFILE=/run/wallview-touch-loop.pid
 LOG=/tmp/wallview-touch.log
 
 touch_loop() {
+	trap 'kill $! 2>/dev/null; exit 0' TERM
 	while [ "$(cat /data/wallview/touch-resampling 2>/dev/null)" != off ]; do
 		if [ "$(wc -c < "$LOG" 2>/dev/null || echo 0)" -gt 65536 ]; then
 			tail -c 16384 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 		fi
-		wallview-touch >> "$LOG" 2>&1
-		sleep 2
+		(
+			set -a
+			[ -r /data/wallview/touch.env ] && . /data/wallview/touch.env
+			lift=$(cat /data/wallview/touch-lift-ms 2>/dev/null)
+			[ -n "$lift" ] && WALLVIEW_TOUCH_LIFT_MS=$lift
+			exec wallview-touch
+		) >> "$LOG" 2>&1 &
+		wait $!
+		sleep 2 &
+		wait $!
 	done
+	rm -f "$PIDFILE"
 }
 
 case "$1" in
@@ -18,17 +28,21 @@ start)
 	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
 		exit 0
 	fi
+	[ "$(cat /data/wallview/touch-resampling 2>/dev/null)" = off ] && exit 0
 	touch_loop </dev/null >/dev/null 2>&1 &
 	echo $! > "$PIDFILE"
 	;;
 stop)
 	[ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
 	rm -f "$PIDFILE"
-	killall wallview-touch 2>/dev/null
+	sleep 1
+	for i in 1 2 3; do
+		killall wallview-touch 2>/dev/null || break
+		sleep 1
+	done
 	;;
 restart)
 	"$0" stop
-	sleep 1
 	"$0" start
 	;;
 esac

@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vnořený scroll</title>
+<link rel="stylesheet" href="common.css">
+<style>
+html, body { height: 100%; overflow: hidden; }
+#page { position: fixed; top: 40px; left: 0; right: 0; bottom: 0; overflow-y: auto; padding: 8px 0; }
+h2 { margin: 14px 12px 8px; font-size: 15px; color: var(--muted); }
+.strip { display: flex; gap: 8px; overflow-x: auto; padding: 0 12px 4px; scrollbar-width: none; }
+.strip::-webkit-scrollbar { display: none; }
+.card { flex: none; width: 140px; height: 110px; border-radius: 14px; background: var(--card); padding: 10px; display: flex; flex-direction: column; justify-content: space-between; }
+.card b { font-weight: 500; }
+.card span { font-size: 22px; }
+.filler { height: 60px; margin: 8px 12px; border-radius: 12px; background: var(--card); display: flex; align-items: center; padding: 0 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="page"></div>
+<script src="common.js"></script>
+<script>
+const page = document.getElementById("page");
+const parts = [];
+for (let s = 0; s < 8; s++) {
+	parts.push(`<h2>Místnost ${s + 1}</h2><div class="strip">`);
+	for (let c = 0; c < 12; c++) {
+		parts.push(`<div class="card"><b>Karta ${s + 1}.${c + 1}</b><span>${["💡", "🌡️", "🔌", "🪟", "🎵", "📷"][c % 6]}</span></div>`);
+	}
+	parts.push(`</div><div class="filler">Řádek ${s * 2 + 1}</div><div class="filler">Řádek ${s * 2 + 2}</div>`);
+}
+page.innerHTML = parts.join("");
+let gesture = null;
+let right = 0;
+let wrong = 0;
+let both = 0;
+let none = 0;
+function show() {
+	tt.set("směr", `správně ${right}  špatně ${wrong}  oba ${both}  nic ${none}`);
+}
+tt.onReset(() => {
+	right = wrong = both = none = 0;
+	show();
+});
+show();
+addEventListener("touchstart", (e) => {
+	const strip = e.target.closest(".strip");
+	const t = e.touches[0];
+	gesture = { strip, x: t.clientX, y: t.clientY, dx: 0, dy: 0, page: page.scrollTop, stripPos: strip ? strip.scrollLeft : 0 };
+}, { passive: true });
+addEventListener("touchmove", (e) => {
+	if (!gesture) {
+		return;
+	}
+	const t = e.touches[0];
+	gesture.dx = t.clientX - gesture.x;
+	gesture.dy = t.clientY - gesture.y;
+}, { passive: true });
+addEventListener("touchend", () => {
+	const g = gesture;
+	gesture = null;
+	if (!g || !g.strip || Math.hypot(g.dx, g.dy) < 30) {
+		return;
+	}
+	setTimeout(() => {
+		const pageMoved = Math.abs(page.scrollTop - g.page) > 4;
+		const stripMoved = Math.abs(g.strip.scrollLeft - g.stripPos) > 4;
+		const wantX = Math.abs(g.dx) > Math.abs(g.dy);
+		let result;
+		if (pageMoved && stripMoved) {
+			both++;
+			result = "both";
+		} else if (!pageMoved && !stripMoved) {
+			none++;
+			result = "none";
+		} else if (stripMoved === wantX) {
+			right++;
+			result = "right";
+		} else {
+			wrong++;
+			result = "wrong";
+		}
+		tt.record("nested", { result, dx: Math.round(g.dx), dy: Math.round(g.dy) });
+		show();
+	}, 80);
+}, { passive: true });
+</script>
+</body>
+</html>

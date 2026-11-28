@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seznam entit</title>
+<link rel="stylesheet" href="common.css">
+<style>
+html, body { height: 100%; overflow: hidden; }
+#list { position: fixed; top: 40px; left: 0; right: 0; bottom: 0; overflow-y: auto; padding: 8px; }
+.row { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 12px; margin-bottom: 6px; border-radius: 12px; background: var(--card); }
+.icon { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-size: 18px; background: var(--card2); flex: none; }
+.row.on .icon { background: rgba(255,201,77,.2); color: var(--on); }
+.name { flex: 1; min-width: 0; }
+.name b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.name span { color: var(--muted); font-size: 12px; }
+.state { color: var(--muted); font-size: 13px; }
+.section { margin: 14px 4px 8px; color: var(--muted); font-weight: 600; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="list"></div>
+<script src="common.js"></script>
+<script src="scrollmeter.js"></script>
+<script>
+const rooms = ["Obývák", "Kuchyň", "Ložnice", "Koupelna", "Pracovna", "Chodba", "Dětský pokoj", "Zahrada", "Garáž", "Sklep"];
+const kinds = [["💡", "Světlo", (i) => i % 3 ? "Zapnuto" : "Vypnuto"], ["🌡️", "Teplota", (i) => `${(19 + (i % 7) * 0.4).toFixed(1)} °C`], ["💧", "Vlhkost", (i) => `${40 + (i % 20)} %`], ["🔌", "Zásuvka", (i) => i % 2 ? "Zapnuto" : "Vypnuto"], ["🪟", "Okno", (i) => i % 4 ? "Zavřeno" : "Otevřeno"], ["⚡", "Spotřeba", (i) => `${(i * 13) % 900} W`]];
+const list = document.getElementById("list");
+const html = [];
+for (let i = 0; i < 300; i++) {
+	if (i % 30 === 0) {
+		html.push(`<div class="section">${rooms[i / 30]}</div>`);
+	}
+	const [icon, kind, state] = kinds[i % kinds.length];
+	const s = state(i);
+	html.push(`<div class="row${s === "Zapnuto" ? " on" : ""}"><div class="icon">${icon}</div><div class="name"><b>${kind} ${rooms[Math.floor(i / 30)]} ${i % 30 + 1}</b><span>${kinds[i % kinds.length][1].toLowerCase()}.${i}</span></div><div class="state">${s}</div></div>`);
+}
+list.innerHTML = html.join("");
+scrollMeter(list, "y", "list");
+</script>
+</body>
+</html>

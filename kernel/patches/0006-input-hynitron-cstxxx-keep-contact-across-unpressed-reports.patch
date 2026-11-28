@@ -1,0 +1,270 @@
+diff --git a/drivers/input/touchscreen/hynitron_cstxxx.c b/drivers/input/touchscreen/hynitron_cstxxx.c
+index e7c2dcd..83266ad 100644
+--- a/drivers/input/touchscreen/hynitron_cstxxx.c
++++ b/drivers/input/touchscreen/hynitron_cstxxx.c
+@@ -13,6 +13,7 @@
+  */
+ 
+ #include <linux/delay.h>
++#include <linux/devm-helpers.h>
+ #include <linux/err.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/i2c.h>
+@@ -21,8 +22,10 @@
+ #include <linux/input/touchscreen.h>
+ #include <linux/mod_devicetable.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
+ #include <linux/property.h>
+ #include <linux/unaligned.h>
++#include <linux/workqueue.h>
+ 
+ /* Per chip data */
+ struct hynitron_ts_chip_data {
+@@ -41,6 +44,10 @@ struct hynitron_ts_data {
+ 	struct input_dev *input_dev;
+ 	struct touchscreen_properties prop;
+ 	struct gpio_desc *reset_gpio;
++	u8 unpressed[16];
++	unsigned long kept_at[16];
++	struct delayed_work release_work;
++	struct mutex report_lock;
+ };
+ 
+ /*
+@@ -49,6 +56,8 @@ struct hynitron_ts_data {
+  */
+ #define CST3XX_FIRMWARE_INFO_START_CMD		0x01d1
+ #define CST3XX_FIRMWARE_INFO_END_CMD		0x09d1
++#define CST3XX_MAX_UNPRESSED_FRAMES		2
++#define CST3XX_KEEP_TIMEOUT_MS			110
+ #define CST3XX_FIRMWARE_CHK_CODE_REG		0xfcd1
+ #define CST3XX_FIRMWARE_VERSION_REG		0x08d2
+ #define CST3XX_FIRMWARE_VER_INVALID_VAL		0xa5a5a5a5
+@@ -85,7 +94,9 @@ static irqreturn_t hyn_interrupt_handler(int irq, void *dev_id)
+ 	struct i2c_client *client = dev_id;
+ 	struct hynitron_ts_data *ts_data = i2c_get_clientdata(client);
+ 
++	mutex_lock(&ts_data->report_lock);
+ 	ts_data->chip->report_touch(client);
++	mutex_unlock(&ts_data->report_lock);
+ 
+ 	return IRQ_HANDLED;
+ }
+@@ -255,6 +266,106 @@ static void cst3xx_report_contact(struct hynitron_ts_data *ts_data,
+ 	input_report_abs(ts_data->input_dev, ABS_MT_TOUCH_MAJOR, w);
+ }
+ 
++static void cst3xx_keep_contact(struct hynitron_ts_data *ts_data, u8 id)
++{
++	struct input_mt *mt = ts_data->input_dev->mt;
++
++	if (id >= mt->num_slots || id >= ARRAY_SIZE(ts_data->unpressed) ||
++	    !input_mt_is_active(&mt->slots[id]) ||
++	    ts_data->unpressed[id] >= CST3XX_MAX_UNPRESSED_FRAMES)
++		return;
++
++	if (!ts_data->unpressed[id]++)
++		ts_data->kept_at[id] = jiffies;
++	input_mt_slot(ts_data->input_dev, id);
++	input_mt_report_slot_state(ts_data->input_dev, MT_TOOL_FINGER, true);
++}
++
++static void cst3xx_release_slots(struct hynitron_ts_data *ts_data, bool all,
++				 unsigned int pressed)
++{
++	struct input_mt *mt = ts_data->input_dev->mt;
++	bool dropped = false;
++	unsigned int id;
++
++	for (id = 0; id < mt->num_slots && id < ARRAY_SIZE(ts_data->unpressed); id++) {
++		if ((!all && !ts_data->unpressed[id]) || (pressed & BIT(id)))
++			continue;
++		ts_data->unpressed[id] = 0;
++		if (!input_mt_is_active(&mt->slots[id]))
++			continue;
++		input_mt_slot(ts_data->input_dev, id);
++		input_mt_report_slot_state(ts_data->input_dev, MT_TOOL_FINGER, false);
++		dropped = true;
++	}
++
++	if (dropped) {
++		input_mt_report_pointer_emulation(ts_data->input_dev, false);
++		input_sync(ts_data->input_dev);
++	}
++}
++
++static void cst3xx_drop_kept(struct hynitron_ts_data *ts_data)
++{
++	cst3xx_release_slots(ts_data, false, 0);
++}
++
++static void cst3xx_arm_release(struct hynitron_ts_data *ts_data,
++			       unsigned long now)
++{
++	unsigned long deadline, next = 0;
++	bool pending = false;
++	unsigned int id;
++
++	for (id = 0; id < ARRAY_SIZE(ts_data->unpressed); id++) {
++		if (!ts_data->unpressed[id])
++			continue;
++		deadline = ts_data->kept_at[id] +
++			   msecs_to_jiffies(CST3XX_KEEP_TIMEOUT_MS);
++		if (!pending || time_before(deadline, next))
++			next = deadline;
++		pending = true;
++	}
++
++	if (pending)
++		mod_delayed_work(system_highpri_wq, &ts_data->release_work,
++				 time_after(next, now) ? next - now : 0);
++}
++
++static void cst3xx_release_work(struct work_struct *work)
++{
++	struct hynitron_ts_data *ts_data =
++		container_of(to_delayed_work(work), struct hynitron_ts_data,
++			     release_work);
++	struct input_mt *mt = ts_data->input_dev->mt;
++	bool dropped = false;
++	unsigned long now;
++	unsigned int id;
++
++	mutex_lock(&ts_data->report_lock);
++	now = jiffies;
++	for (id = 0; id < mt->num_slots && id < ARRAY_SIZE(ts_data->unpressed); id++) {
++		if (!ts_data->unpressed[id] ||
++		    time_before(now, ts_data->kept_at[id] +
++				msecs_to_jiffies(CST3XX_KEEP_TIMEOUT_MS)))
++			continue;
++		ts_data->unpressed[id] = 0;
++		if (!input_mt_is_active(&mt->slots[id]))
++			continue;
++		input_mt_slot(ts_data->input_dev, id);
++		input_mt_report_slot_state(ts_data->input_dev, MT_TOOL_FINGER, false);
++		dropped = true;
++	}
++
++	if (dropped) {
++		input_mt_report_pointer_emulation(ts_data->input_dev, false);
++		input_sync(ts_data->input_dev);
++	}
++
++	cst3xx_arm_release(ts_data, now);
++	mutex_unlock(&ts_data->report_lock);
++}
++
+ static int cst3xx_finish_touch_read(struct i2c_client *client)
+ {
+ 	unsigned char buf[3];
+@@ -289,6 +400,9 @@ static int cst3xx_finish_touch_read(struct i2c_client *client)
+ static void cst3xx_touch_report(struct i2c_client *client)
+ {
+ 	struct hynitron_ts_data *ts_data = i2c_get_clientdata(client);
++	struct input_mt *mt = ts_data->input_dev->mt;
++	unsigned int pressed = 0;
++	bool landing = false;
+ 	u8 buf[28];
+ 	u8 finger_id, sw, w;
+ 	unsigned int x, y;
+@@ -305,18 +419,22 @@ static void cst3xx_touch_report(struct i2c_client *client)
+ 	    buf[0] == CST3XX_TOUCH_DATA_CHK_VAL) {
+ 		dev_err(&client->dev, "cst3xx touch read failure\n");
+ 		cst3xx_finish_touch_read(client);
++		cst3xx_drop_kept(ts_data);
+ 		return;
+ 	}
+ 
+ 	/* Report to the device we're done reading the touch data. */
+ 	err = cst3xx_finish_touch_read(client);
+-	if (err)
++	if (err) {
++		cst3xx_drop_kept(ts_data);
+ 		return;
++	}
+ 
+ 	touch_cnt = buf[5] & CST3XX_TOUCH_COUNT_MASK;
+ 	if (touch_cnt > ts_data->chip->max_touch_num) {
+ 		dev_err(&client->dev, "cst3xx invalid touch count (%d vs %d max)\n",
+ 			touch_cnt, ts_data->chip->max_touch_num);
++		cst3xx_drop_kept(ts_data);
+ 		return;
+ 	}
+ 
+@@ -329,10 +447,32 @@ static void cst3xx_touch_report(struct i2c_client *client)
+ 		end_byte = touch_cnt * 5 + 2;
+ 		if (buf[end_byte] != CST3XX_TOUCH_DATA_CHK_VAL) {
+ 			dev_err(&client->dev, "cst3xx touch read failure\n");
++			cst3xx_drop_kept(ts_data);
+ 			return;
+ 		}
+ 	}
+ 
++	for (i = 0; i < touch_cnt; i++) {
++		finger_id = (buf[idx] >> 4) & 0x0f;
++		if (finger_id >= ts_data->chip->max_touch_num) {
++			dev_err(&client->dev,
++				"cst3xx invalid finger id %d\n", finger_id);
++			cst3xx_drop_kept(ts_data);
++			return;
++		}
++		if (((buf[idx] & 0x0f) >> 1) == CST3XX_TOUCH_DATA_TOUCH_VAL) {
++			pressed |= BIT(finger_id);
++			if (finger_id >= mt->num_slots ||
++			    !input_mt_is_active(&mt->slots[finger_id]))
++				landing = true;
++		}
++		idx += i ? 5 : 7;
++	}
++	idx = 0;
++
++	if (landing)
++		cst3xx_release_slots(ts_data, true, pressed);
++
+ 	/* Parse through the buffer to capture touch data. */
+ 	for (i = 0; i < touch_cnt; i++) {
+ 		x = ((buf[idx + 1] << 4) | ((buf[idx + 3] >> 4) & 0x0f));
+@@ -349,8 +489,12 @@ static void cst3xx_touch_report(struct i2c_client *client)
+ 		}
+ 
+ 		/* sw value of 0 means no touch, 0x03 means touch */
+-		if (sw == CST3XX_TOUCH_DATA_TOUCH_VAL)
++		if (sw == CST3XX_TOUCH_DATA_TOUCH_VAL) {
++			ts_data->unpressed[finger_id] = 0;
+ 			cst3xx_report_contact(ts_data, finger_id, x, y, w);
++		} else {
++			cst3xx_keep_contact(ts_data, finger_id);
++		}
+ 
+ 		idx += 5;
+ 
+@@ -361,6 +505,12 @@ static void cst3xx_touch_report(struct i2c_client *client)
+ 
+ 	input_mt_sync_frame(ts_data->input_dev);
+ 	input_sync(ts_data->input_dev);
++
++	for (i = 0; i < mt->num_slots && i < ARRAY_SIZE(ts_data->unpressed); i++)
++		if (!input_mt_is_active(&mt->slots[i]))
++			ts_data->unpressed[i] = 0;
++
++	cst3xx_arm_release(ts_data, jiffies);
+ }
+ 
+ static int cst3xx_input_dev_int(struct i2c_client *client)
+@@ -456,6 +606,15 @@ static int hyn_probe(struct i2c_client *client)
+ 	if (err < 0)
+ 		return err;
+ 
++	err = devm_mutex_init(&client->dev, &ts_data->report_lock);
++	if (err)
++		return err;
++
++	err = devm_delayed_work_autocancel(&client->dev, &ts_data->release_work,
++					   cst3xx_release_work);
++	if (err)
++		return err;
++
+ 	err = devm_request_threaded_irq(&client->dev, client->irq,
+ 					NULL, hyn_interrupt_handler,
+ 					IRQF_ONESHOT,
