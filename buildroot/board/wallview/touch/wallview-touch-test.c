@@ -189,6 +189,9 @@ int main(void) {
 	  printf("first move after a rest is sent at once: x %d\n", outx[0]); assert(outx[0] == 140);
 	  t += 200 * MS; run_until(t); move(t, 0, 143, 100); drain(t);
 	  printf("small first move after a 200 ms rest is sent at once: x %d\n", outx[0]); assert(outx[0] == 143);
+	  { int prev = outx[0], back = 0; t += 152 * MS; run_until(t); move(t, 0, 160, 100); drain(t); move(t + 14 * MS, 0, 175, 100); drain(t + 14 * MS);
+	    for (int i = 1; i <= 6; i++) { run_until(t + i * 5 * MS); if (outx[0] < prev) back = 1; prev = outx[0]; }
+	    printf("second sample soon after a long gap: back step %d\n", back); assert(!back); t += 30 * MS; }
 	  up(t + 10 * MS, 0); run_until(t + 300 * MS); t += 300 * MS;
 	  reset(); down(t, 0, 35, 200, 240); down(t, 1, 36, 280, 240); drain(t);
 	  { double ax0 = 200, ay0 = 240, bx = 280, by = 240;

@@ -643,7 +643,8 @@ handle_frame(int64_t time)
             c->dirty = 0;
             c->fresh = 1;
             if (gap > opts->gap_blend_min && gap < opts->gap_blend &&
-                abs(c->x - last_x) + abs(c->y - last_y) > opts->rejoin_min)
+                (double)(c->x - last_x) * (c->x - last_x) + (double)(c->y - last_y) * (c->y - last_y) >
+                    (double)opts->rejoin_min * opts->rejoin_min)
                 c->blend = 1;
             add_sample(c, time);
         }
@@ -767,9 +768,14 @@ resample(const struct options *options, int64_t now)
                 struct sample *a = &c->history[i - 1];
                 struct sample *b = &c->history[i];
 
-                if (a->time <= target && target <= b->time && b->time - a->time <= options->max_sample_gap) {
-                    x = interpolate(a->x, b->x, a->time, b->time, target);
-                    y = interpolate(a->y, b->y, a->time, b->time, target);
+                if (a->time <= target && target <= b->time) {
+                    if (b->time - a->time <= options->max_sample_gap) {
+                        x = interpolate(a->x, b->x, a->time, b->time, target);
+                        y = interpolate(a->y, b->y, a->time, b->time, target);
+                    } else {
+                        x = b->x;
+                        y = b->y;
+                    }
                     break;
                 }
             }
