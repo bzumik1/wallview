@@ -577,7 +577,7 @@ rejoins(int slot, int64_t time)
     double dy = c->y - (last->y + c->vy * dt);
     double limit = opts->rejoin_min + opts->rejoin_slack * speed * dt;
     double along = speed > 0 ? ((c->x - last->x) * c->vx + (c->y - last->y) * c->vy) / speed : 0;
-    int ok = dx * dx + dy * dy <= limit * limit && along >= -opts->rejoin_min;
+    int ok = dx * dx + dy * dy <= limit * limit && along >= (c->reach < opts->predict_travel ? 1 : -opts->rejoin_min);
 
     if (opts->debug)
         fprintf(stderr, "wallview-touch: %s slot %d after %.0f ms, off %.0f px, limit %.0f px, along %.0f px\n",
@@ -775,6 +775,7 @@ coast(struct contact *c, const struct sample *last, int64_t target, int64_t step
     double speed = sqrt(c->vx * c->vx + c->vy * c->vy);
 
     if (opts->coast <= 0 || c->turned || speed <= 0 || speed < opts->coast_speed || target <= last->time ||
+        c->reach < opts->predict_travel ||
         c->lift_at - last->time > opts->coast_after)
         return 0;
     if (!c->coasting) {
@@ -1163,8 +1164,8 @@ load_options(struct options *options)
         .lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80),
         .rejoin_min = (int)env_number("WALLVIEW_TOUCH_REJOIN_PX", 30),
         .rejoin_slack = env_number("WALLVIEW_TOUCH_REJOIN_SLACK", 0.75),
-        .hold_travel = (int)env_number("WALLVIEW_TOUCH_HOLD_TRAVEL_PX", 13),
-        .start_travel = (int)env_number("WALLVIEW_TOUCH_START_TRAVEL_PX", 13),
+        .hold_travel = (int)env_number("WALLVIEW_TOUCH_HOLD_TRAVEL_PX", 5),
+        .start_travel = (int)env_number("WALLVIEW_TOUCH_START_TRAVEL_PX", 5),
         .hold_speed = env_number("WALLVIEW_TOUCH_HOLD_PX_PER_S", 60),
         .hold_max_speed = env_number("WALLVIEW_TOUCH_HOLD_MAX_PX_PER_S", 0),
         .start_speed = env_number("WALLVIEW_TOUCH_START_PX_PER_S", 150),

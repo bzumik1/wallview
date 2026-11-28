@@ -82,7 +82,7 @@ static void reset(void) { memset(contacts, 0, sizeof contacts); downs = ups = 0;
 static void defaults(void) {
 	setenv("WALLVIEW_TOUCH_LIFT_MS", "", 1);
 	o = (struct options){ .period = NSEC_PER_SEC / 120, .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 16), .max_prediction = 30 * MS, .max_sample_gap = 150 * MS,
-		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 13, .start_travel = 13, .hold_speed = 60, .start_speed = 150,
+		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 5, .start_travel = 5, .hold_speed = 60, .start_speed = 150,
 		.hold_recent = 100 * MS, .coast = 250 * MS, .coast_after = 85 * MS, .coast_max = 80, .coast_speed = 150, .blend = 0.7, .ease_min = 100 * MS, .gap_blend = 280 * MS, .gap_blend_min = 60 * MS, .predict_travel = 13, .debug = getenv("DBG") != NULL };
 }
 static int64_t drag(int64_t t, int sl, double *x, double *y, double vx, double vy, int n, int64_t dt) {
@@ -203,6 +203,17 @@ int main(void) {
 	run_until(t + 200 * MS);
 	printf("out of range slot: ups %d\n", ups); assert(ups == 0 && contacts[0].active);
 	slot = 0; up(t + 210 * MS, 0); run_until(t + 400 * MS); assert(ups == 1);
+
+	{ int split = 0, cases = 0;
+	  for (int v = 150; v <= 450; v += 100) for (int dt = 20; dt <= 40; dt += 10) for (int k = 2; k <= 3; k++) for (int gap = 40; gap <= 70; gap += 15) {
+	      reset(); t += 500 * MS; down(t, 0, 50, 100, 200); drain(t);
+	      double x = 100, y = 200; t = drag(t, 0, &x, &y, v, 0, k, dt * MS);
+	      if (x - 100 >= 12) continue;
+	      t += 5 * MS; run_until(t); up(t, 0); drain(t);
+	      t += gap * MS; run_until(t); x += v * (gap + 5) / 1000.0; down(t, 0, 51, (int)x, 200); drain(t);
+	      t = drag(t, 0, &x, &y, v, 0, 4, dt * MS); up(t, 0); drain(t); run_until(t + 400 * MS); t += 400 * MS;
+	      cases++; split += downs > 1; }
+	  printf("false lift inside the tap radius of a slow drag (%d cases): split %d\n", cases, split); assert(cases >= 10 && split == 0); }
 
 	{ int worst = 0, cases = 0;
 	  for (int slide = 2; slide <= 12; slide++) for (int ph = 0; ph < 8; ph++) for (int steps = 2; steps <= 4; steps++) {
