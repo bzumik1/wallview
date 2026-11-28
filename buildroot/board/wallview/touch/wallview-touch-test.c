@@ -215,6 +215,17 @@ int main(void) {
 	      cases++; split += downs > 1; }
 	  printf("false lift inside the tap radius of a slow drag, finger back 1 px behind, on the last sample or ahead (%d cases): split %d\n", cases, split); assert(cases >= 30 && split == 0); }
 
+	{ int merged = 0, cases = 0;
+	  for (int wob = 0; wob <= 7; wob++) for (int dir = 0; dir < 3; dir++) for (int off = 6; off <= 26; off += 10) for (int gap = 20; gap <= 70; gap += 25) {
+	      reset(); t += 500 * MS; down(t, 0, 70, 200, 240); drain(t);
+	      t += 20 * MS; run_until(t); move(t, 0, 208, 240); drain(t);
+	      if (wob) { t += 20 * MS; run_until(t); move(t, 0, 208 - wob, 240); drain(t); }
+	      t += 20 * MS; run_until(t); up(t, 0); drain(t);
+	      t += gap * MS; run_until(t); down(t, 0, 71, dir == 2 ? 200 : dir ? 208 - wob : 208 - wob - off, dir == 1 ? 240 + off : 240); drain(t);
+	      t += 30 * MS; run_until(t); up(t, 0); drain(t); run_until(t + 400 * MS); t += 400 * MS;
+	      cases++; merged += downs < 2; }
+	  printf("second tap beside, behind or on the down point of a slid first tap that went back 0-7 px (%d cases): merged %d\n", cases, merged); assert(merged == 0); }
+
 	{ int64_t late[2];
 	  for (int k = 0; k < 2; k++) {
 	      o.tap_hold = k ? 30 * MS : o.lift_hold;
