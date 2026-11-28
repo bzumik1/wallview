@@ -7,11 +7,13 @@
 #include <math.h>
 #include <poll.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/timerfd.h>
 #include <time.h>
@@ -56,6 +58,10 @@ struct contact {
     int blend;
     double offset_x;
     double offset_y;
+    int coasting;
+    double coast_x;
+    double coast_y;
+    int64_t coast_at;
 };
 
 struct options {
@@ -77,6 +83,8 @@ struct options {
     int coast_max;
     double coast_speed;
     double blend;
+    int64_t ease_min;
+    int predict_travel;
     int debug;
     int vblank;
     const char *drm_path;
@@ -86,7 +94,7 @@ struct options {
 
 static struct contact contacts[MAX_SLOTS];
 static int min_x, max_x = 479, min_y, max_y = 479;
-static int output;
+static int output = -1;
 static int timer;
 static int timer_armed;
 static int64_t period;
@@ -293,7 +301,6 @@ request_vblank(void)
 {
     if (vblank_pending)
         return 0;
-    open_drm();
     if (drm < 0)
         return -1;
 
@@ -312,7 +319,7 @@ arm_timer(int on)
 
     if (mode == timer_armed)
         return;
-    if (!mode && phase_timer >= 0) {
+    if (mode != 2 && phase_timer >= 0) {
         struct itimerspec off = { 0 };
 
         timerfd_settime(phase_timer, 0, &off, NULL);
@@ -328,7 +335,7 @@ read_vblank(void)
     ssize_t size;
     int64_t latest = 0;
 
-    while ((size = read(drm, events, sizeof(events))) > 0)
+    while ((size = read(drm, events, sizeof(events))) > 0) {
         for (ssize_t i = 0; i < size / (ssize_t)sizeof(events[0]); i++) {
             if (events[i].base.type != DRM_EVENT_VBLANK)
                 continue;
@@ -343,6 +350,9 @@ read_vblank(void)
             if (time > latest)
                 latest = time;
         }
+        if ((size_t)size < sizeof(events))
+            break;
+    }
     if (latest) {
         vblank_pending = 0;
         if (timer_armed == 2)
@@ -438,6 +448,7 @@ release(int slot)
     struct sample *last = c->samples ? &c->history[c->samples - 1] : NULL;
 
     c->releasing = 0;
+    c->coasting = 0;
     if (last && (!c->predicted || c->fresh))
         emit_position(slot, clamp(last->x, min_x, max_x), clamp(last->y, min_y, max_y));
     c->fresh = 0;
@@ -526,6 +537,7 @@ handle_frame(int64_t time)
         if (c->started && c->releasing && rejoins(slot, time)) {
             c->started = 0;
             c->releasing = 0;
+            c->coasting = 0;
             c->dirty = 0;
             c->fresh = 1;
             c->blend = 1;
@@ -562,6 +574,7 @@ handle_frame(int64_t time)
                 c->dirty = 0;
             } else if (opts->lift_hold > 0 && holds(slot, time)) {
                 c->releasing = 1;
+                c->coasting = 0;
                 c->lift_at = time;
                 c->release_at = time + opts->lift_hold;
                 c->dirty = 0;
@@ -587,22 +600,37 @@ interpolate(int a, int b, int64_t ta, int64_t tb, int64_t t)
     return round_half_away(a + (b - a) * alpha);
 }
 
-static void
-coast(const struct contact *c, const struct sample *last, int64_t target, int *x, int *y)
+static int
+coast(struct contact *c, const struct sample *last, int64_t target, int64_t step, int *x, int *y)
 {
     double speed = sqrt(c->vx * c->vx + c->vy * c->vy);
 
     if (opts->coast <= 0 || speed <= 0 || speed < opts->coast_speed || target <= last->time ||
         c->lift_at - last->time > opts->coast_after)
-        return;
+        return 0;
+    if (!c->coasting) {
+        c->coasting = 1;
+        if (c->emitted_x >= 0) {
+            c->coast_x = c->emitted_x;
+            c->coast_y = c->emitted_y;
+            c->coast_at = target - step;
+        } else {
+            c->coast_x = last->x;
+            c->coast_y = last->y;
+            c->coast_at = last->time;
+        }
+    }
     double tau = (double)opts->coast / NSEC_PER_SEC;
-    double t = (double)(target - last->time) / NSEC_PER_SEC;
+    double t = (double)(target - c->coast_at) / NSEC_PER_SEC;
     double distance = speed * tau * (1 - exp(-t / tau));
 
-    if (distance > opts->coast_max)
+    int spent = distance >= opts->coast_max;
+
+    if (spent)
         distance = opts->coast_max;
-    *x = round_half_away(last->x + c->vx / speed * distance);
-    *y = round_half_away(last->y + c->vy / speed * distance);
+    *x = round_half_away(c->coast_x + c->vx / speed * distance);
+    *y = round_half_away(c->coast_y + c->vy / speed * distance);
+    return spent || *x < min_x || *x > max_x || *y < min_y || *y > max_y;
 }
 
 static void
@@ -613,10 +641,10 @@ predict(const struct contact *c, const struct sample *last, int64_t target, int 
     int64_t age = target - last->time;
     int64_t ahead = age;
     int64_t limit = interval < opts->max_prediction ? interval : opts->max_prediction;
-    int64_t ease_from = interval + interval / 2;
+    int64_t ease_from = interval + interval / 2 > opts->ease_min ? interval + interval / 2 : opts->ease_min;
     double vx, vy;
 
-    if (interval > opts->max_sample_gap || age <= 0 || age > opts->max_sample_gap)
+    if (interval > opts->max_sample_gap || age <= 0 || age > opts->max_sample_gap || c->reach < opts->predict_travel)
         return;
     if (ahead > limit)
         ahead = limit;
@@ -633,6 +661,8 @@ predict(const struct contact *c, const struct sample *last, int64_t target, int 
 static void
 resample(const struct options *options, int64_t now)
 {
+    int busy = 0;
+
     int64_t target = now - options->latency;
 
     expire_releases(now);
@@ -647,8 +677,13 @@ resample(const struct options *options, int64_t now)
         int x = last->x;
         int y = last->y;
 
+        int spent = 0;
+
         c->predicted = 0;
-        if (target < last->time) {
+        if (target < c->history[0].time) {
+            x = c->history[0].x;
+            y = c->history[0].y;
+        } else if (target < last->time) {
             for (int i = c->samples - 1; i > 0; i--) {
                 struct sample *a = &c->history[i - 1];
                 struct sample *b = &c->history[i];
@@ -661,7 +696,7 @@ resample(const struct options *options, int64_t now)
             }
         } else {
             if (c->releasing)
-                coast(c, last, target, &x, &y);
+                spent = coast(c, last, target, timer_armed == 2 ? frame : opts->period, &x, &y);
             else if (c->samples >= 2)
                 predict(c, last, target, &x, &y);
             c->predicted = x != last->x || y != last->y;
@@ -687,9 +722,13 @@ resample(const struct options *options, int64_t now)
         }
         c->fresh = 0;
         emit_position(slot, clamp(x, min_x, max_x), clamp(y, min_y, max_y));
+        if (spent)
+            release(slot);
+        else if (c->releasing || c->offset_x != 0 || c->offset_y != 0 || target - last->time <= options->max_sample_gap)
+            busy = 1;
     }
     flush();
-    arm_timer(first_active() >= 0);
+    arm_timer(busy);
 }
 
 static int dropped;
@@ -741,10 +780,9 @@ resync(int64_t time, int *slot)
         struct contact *c = &contacts[slot];
 
         if (ids[slot] < 0) {
-            if ((c->active || c->started) && !c->releasing) {
+            c->started = 0;
+            if (c->active && !c->releasing)
                 c->ended = 1;
-                c->started = 0;
-            }
         } else if (!c->active || c->releasing || c->tracking_id != ids[slot]) {
             c->tracking_id = ids[slot];
             c->started = 1;
@@ -757,7 +795,7 @@ resync(int64_t time, int *slot)
 static void
 handle_event(const struct input_event *event, int *slot)
 {
-    struct contact *c = &contacts[*slot];
+    struct contact *c = *slot >= 0 ? &contacts[*slot] : NULL;
     int64_t time = event->input_event_sec * NSEC_PER_SEC + event->input_event_usec * 1000LL;
 
     if (event->type == EV_SYN && event->code == SYN_DROPPED) {
@@ -772,11 +810,13 @@ handle_event(const struct input_event *event, int *slot)
         return;
     }
     if (event->type == EV_ABS) {
+        if (event->code == ABS_MT_SLOT) {
+            *slot = event->value >= 0 && event->value < MAX_SLOTS ? event->value : -1;
+            return;
+        }
+        if (!c)
+            return;
         switch (event->code) {
-        case ABS_MT_SLOT:
-            if (event->value >= 0 && event->value < MAX_SLOTS)
-                *slot = event->value;
-            break;
         case ABS_MT_TRACKING_ID:
             if (event->value < 0) {
                 c->ended = c->active || c->started;
@@ -882,7 +922,7 @@ env_number(const char *name, double fallback)
     number = strtod(value, &end);
     while (*end == ' ' || *end == '\n' || *end == '\t')
         end++;
-    if (*end || !isfinite(number) || number < 0) {
+    if (*end || !isfinite(number) || number < 0 || number > 1e6) {
         fprintf(stderr, "wallview-touch: ignoring %s=%s\n", name, value);
         return fallback;
     }
@@ -905,7 +945,7 @@ load_options(struct options *options)
         .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 16),
         .max_prediction = env_ms("WALLVIEW_TOUCH_PREDICTION_MS", 30),
         .max_sample_gap = env_ms("WALLVIEW_TOUCH_MAX_GAP_MS", 150),
-        .lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 100),
+        .lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80),
         .rejoin_min = (int)env_number("WALLVIEW_TOUCH_REJOIN_PX", 30),
         .rejoin_slack = env_number("WALLVIEW_TOUCH_REJOIN_SLACK", 0.75),
         .hold_travel = (int)env_number("WALLVIEW_TOUCH_HOLD_TRAVEL_PX", 12),
@@ -914,11 +954,13 @@ load_options(struct options *options)
         .hold_max_speed = env_number("WALLVIEW_TOUCH_HOLD_MAX_PX_PER_S", 0),
         .start_speed = env_number("WALLVIEW_TOUCH_START_PX_PER_S", 150),
         .hold_recent = env_ms("WALLVIEW_TOUCH_HOLD_RECENT_MS", 100),
-        .coast = env_ms("WALLVIEW_TOUCH_COAST_MS", 40),
-        .coast_after = env_ms("WALLVIEW_TOUCH_COAST_AFTER_MS", 40),
-        .coast_max = (int)env_number("WALLVIEW_TOUCH_COAST_PX", 40),
+        .coast = env_ms("WALLVIEW_TOUCH_COAST_MS", 250),
+        .coast_after = env_ms("WALLVIEW_TOUCH_COAST_AFTER_MS", 85),
+        .coast_max = (int)env_number("WALLVIEW_TOUCH_COAST_PX", 80),
         .coast_speed = env_number("WALLVIEW_TOUCH_COAST_PX_PER_S", 150),
         .blend = env_number("WALLVIEW_TOUCH_BLEND", 0.7),
+        .ease_min = env_ms("WALLVIEW_TOUCH_PREDICT_EASE_MS", 0),
+        .predict_travel = (int)env_number("WALLVIEW_TOUCH_PREDICT_TRAVEL_PX", 6),
         .debug = (int)env_number("WALLVIEW_TOUCH_DEBUG", 0),
         .vblank = (int)env_number("WALLVIEW_TOUCH_VBLANK", 0),
         .drm_path = getenv("WALLVIEW_TOUCH_DRM") && *getenv("WALLVIEW_TOUCH_DRM") ? getenv("WALLVIEW_TOUCH_DRM") : "/dev/dri/card0",
@@ -927,6 +969,36 @@ load_options(struct options *options)
     };
     if (options->blend > 0.95)
         options->blend = 0.7;
+}
+
+static volatile sig_atomic_t stopping;
+
+static void
+stop(int signal)
+{
+    (void)signal;
+    stopping = 1;
+}
+
+static int
+touching(int input)
+{
+    unsigned long keys[(KEY_CNT + 63) / 64] = { 0 };
+
+    return ioctl(input, EVIOCGKEY(sizeof(keys)), keys) == 0 && (keys[BTN_TOUCH / 64] & (1ul << (BTN_TOUCH % 64)));
+}
+
+static int
+finish(int status)
+{
+    if (output >= 0) {
+        for (int slot = 0; slot < MAX_SLOTS; slot++)
+            if (contacts[slot].active)
+                release(slot);
+        flush();
+        ioctl(output, UI_DEV_DESTROY);
+    }
+    return status;
 }
 
 int
@@ -946,20 +1018,24 @@ main(int argc, char **argv)
     input_fd = input;
 
     for (int waited = 0;; waited++) {
-        unsigned long keys[(KEY_CNT + 63) / 64] = { 0 };
-
-        if (ioctl(input, EVIOCGKEY(sizeof(keys)), keys) < 0 ||
-            !(keys[BTN_TOUCH / 64] & (1ul << (BTN_TOUCH % 64))))
-            break;
-        if (waited == 100) {
-            fprintf(stderr, "wallview-touch: touch held for 5 s, grabbing anyway\n");
+        if (waited < 600 && touching(input)) {
+            if (waited == 100)
+                fprintf(stderr, "wallview-touch: touch held for 5 s, waiting for the lift\n");
+            usleep(50000);
+            continue;
+        }
+        if (ioctl(input, EVIOCGRAB, 1) < 0) {
+            fprintf(stderr, "wallview-touch: grab: %s\n", strerror(errno));
+            return 1;
+        }
+        if (waited >= 600) {
+            fprintf(stderr, "wallview-touch: touch held for 30 s, grabbing anyway\n");
             break;
         }
+        if (!touching(input))
+            break;
+        ioctl(input, EVIOCGRAB, 0);
         usleep(50000);
-    }
-    if (ioctl(input, EVIOCGRAB, 1) < 0) {
-        fprintf(stderr, "wallview-touch: grab: %s\n", strerror(errno));
-        return 1;
     }
     {
         struct input_event stale[64];
@@ -970,6 +1046,13 @@ main(int argc, char **argv)
     load_positions();
     for (int i = 0; i < MAX_SLOTS; i++)
         contacts[i].dirty = 0;
+
+    int slot = 0;
+    struct input_absinfo current_slot;
+
+    if (ioctl(input, EVIOCGABS(ABS_MT_SLOT), &current_slot) == 0 && current_slot.value >= 0 &&
+        current_slot.value < MAX_SLOTS)
+        slot = current_slot.value;
     output = create_output(input);
     if (output < 0) {
         fprintf(stderr, "wallview-touch: uinput: %s\n", strerror(errno));
@@ -978,7 +1061,16 @@ main(int argc, char **argv)
 
     struct sched_param param = { .sched_priority = 40 };
 
-    sched_setscheduler(0, SCHED_FIFO, &param);
+    if (sched_setscheduler(0, SCHED_FIFO, &param) < 0)
+        fprintf(stderr, "wallview-touch: SCHED_FIFO: %s\n", strerror(errno));
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) < 0)
+        fprintf(stderr, "wallview-touch: mlockall: %s\n", strerror(errno));
+
+    struct sigaction action = { .sa_handler = stop };
+
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGTERM, &action, NULL);
+    sigaction(SIGINT, &action, NULL);
 
     period = options.period;
     opts = &options;
@@ -988,13 +1080,6 @@ main(int argc, char **argv)
         return 1;
     }
 
-    int slot = 0;
-    struct input_absinfo current_slot;
-
-    if (ioctl(input, EVIOCGABS(ABS_MT_SLOT), &current_slot) == 0 && current_slot.value >= 0 &&
-        current_slot.value < MAX_SLOTS)
-        slot = current_slot.value;
-
     phase_timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
     if (phase_timer < 0) {
         fprintf(stderr, "wallview-touch: timerfd: %s\n", strerror(errno));
@@ -1003,22 +1088,28 @@ main(int argc, char **argv)
 
     struct pollfd fds[4] = { { input, POLLIN, 0 }, { timer, POLLIN, 0 }, { -1, POLLIN, 0 }, { phase_timer, POLLIN, 0 } };
 
-    for (;;) {
+    open_drm();
+    while (!stopping) {
         fds[2].fd = drm;
         if (poll(fds, 4, -1) < 0) {
             if (errno == EINTR)
                 continue;
-            return 1;
+            return finish(1);
         }
         if (fds[0].revents & (POLLERR | POLLHUP))
-            return 1;
+            return finish(1);
         if (fds[0].revents & POLLIN) {
             struct input_event events[64];
             ssize_t size;
 
-            while ((size = read(input, events, sizeof(events))) > 0)
+            while ((size = read(input, events, sizeof(events))) > 0) {
                 for (size_t i = 0; i < (size_t)size / sizeof(events[0]); i++)
                     handle_event(&events[i], &slot);
+                if ((size_t)size < sizeof(events))
+                    break;
+            }
+            if (first_active() < 0)
+                open_drm();
         }
         int handled = 0;
 
@@ -1041,8 +1132,10 @@ main(int argc, char **argv)
         if (fds[3].revents & POLLIN) {
             uint64_t expirations;
 
-            if (read(phase_timer, &expirations, sizeof(expirations)) > 0)
+            if (read(phase_timer, &expirations, sizeof(expirations)) > 0 && !handled) {
+                handled = 1;
                 resample(&options, now_ns());
+            }
         }
         if (fds[1].revents & POLLIN) {
             uint64_t expirations;
@@ -1054,4 +1147,5 @@ main(int argc, char **argv)
             }
         }
     }
+    return finish(0);
 }
