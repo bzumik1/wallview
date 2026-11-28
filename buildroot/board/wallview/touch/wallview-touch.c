@@ -76,6 +76,7 @@ struct options {
     int64_t max_prediction;
     int64_t max_sample_gap;
     int64_t lift_hold;
+    int64_t tap_hold;
     int rejoin_min;
     double rejoin_slack;
     int hold_travel;
@@ -577,7 +578,7 @@ rejoins(int slot, int64_t time)
     double dy = c->y - (last->y + c->vy * dt);
     double limit = opts->rejoin_min + opts->rejoin_slack * speed * dt;
     double along = speed > 0 ? ((c->x - last->x) * c->vx + (c->y - last->y) * c->vy) / speed : 0;
-    int ok = dx * dx + dy * dy <= limit * limit && along >= (c->reach < opts->predict_travel ? 1 : -opts->rejoin_min);
+    int ok = dx * dx + dy * dy <= limit * limit && along >= (c->reach < opts->predict_travel ? -1 : -opts->rejoin_min);
 
     if (opts->debug)
         fprintf(stderr, "wallview-touch: %s slot %d after %.0f ms, off %.0f px, limit %.0f px, along %.0f px\n",
@@ -662,7 +663,7 @@ handle_frame(int64_t time)
             c->releasing = 1;
             c->coasting = 0;
             c->lift_at = time;
-            c->release_at = time + opts->lift_hold;
+            c->release_at = time + (c->reach < opts->predict_travel ? opts->tap_hold : opts->lift_hold);
             c->dirty = 0;
         } else {
             release(slot);
@@ -1162,6 +1163,7 @@ load_options(struct options *options)
         .max_prediction = env_ms("WALLVIEW_TOUCH_PREDICTION_MS", 30),
         .max_sample_gap = env_ms("WALLVIEW_TOUCH_MAX_GAP_MS", 150),
         .lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80),
+        .tap_hold = env_ms("WALLVIEW_TOUCH_TAP_LIFT_MS", -1),
         .rejoin_min = (int)env_number("WALLVIEW_TOUCH_REJOIN_PX", 30),
         .rejoin_slack = env_number("WALLVIEW_TOUCH_REJOIN_SLACK", 0.75),
         .hold_travel = (int)env_number("WALLVIEW_TOUCH_HOLD_TRAVEL_PX", 5),
@@ -1185,6 +1187,8 @@ load_options(struct options *options)
         .drm_driver = getenv("WALLVIEW_TOUCH_DRM_DRIVER") && *getenv("WALLVIEW_TOUCH_DRM_DRIVER") ? getenv("WALLVIEW_TOUCH_DRM_DRIVER") : "rockchip",
         .vblank_offset = env_ms("WALLVIEW_TOUCH_VBLANK_OFFSET_MS", 10),
     };
+    if (options->tap_hold < 0 || options->tap_hold > options->lift_hold)
+        options->tap_hold = options->lift_hold;
     if (options->blend > 0.95) {
         fprintf(stderr, "wallview-touch: ignoring WALLVIEW_TOUCH_BLEND above 0.95\n");
         options->blend = 0.7;

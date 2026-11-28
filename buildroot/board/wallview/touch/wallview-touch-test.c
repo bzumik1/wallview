@@ -82,7 +82,7 @@ static void reset(void) { memset(contacts, 0, sizeof contacts); downs = ups = 0;
 static void defaults(void) {
 	setenv("WALLVIEW_TOUCH_LIFT_MS", "", 1);
 	o = (struct options){ .period = NSEC_PER_SEC / 120, .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 16), .max_prediction = 30 * MS, .max_sample_gap = 150 * MS,
-		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 5, .start_travel = 5, .hold_speed = 60, .start_speed = 150,
+		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80), .tap_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 5, .start_travel = 5, .hold_speed = 60, .start_speed = 150,
 		.hold_recent = 100 * MS, .coast = 250 * MS, .coast_after = 85 * MS, .coast_max = 80, .coast_speed = 150, .blend = 0.7, .ease_min = 100 * MS, .gap_blend = 280 * MS, .gap_blend_min = 60 * MS, .predict_travel = 13, .debug = getenv("DBG") != NULL };
 }
 static int64_t drag(int64_t t, int sl, double *x, double *y, double vx, double vy, int n, int64_t dt) {
@@ -94,7 +94,7 @@ int main(void) {
 	timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK); defaults(); period = o.period; opts = &o;
 	assert(o.lift_hold == 80 * MS);
 	{ struct options d; load_options(&d);
-	  assert(d.period == o.period && d.latency == o.latency && d.max_prediction == o.max_prediction && d.max_sample_gap == o.max_sample_gap && d.lift_hold == o.lift_hold &&
+	  assert(d.period == o.period && d.latency == o.latency && d.max_prediction == o.max_prediction && d.max_sample_gap == o.max_sample_gap && d.lift_hold == o.lift_hold && d.tap_hold == o.tap_hold &&
 	         d.rejoin_min == o.rejoin_min && d.rejoin_slack == o.rejoin_slack && d.hold_travel == o.hold_travel && d.start_travel == o.start_travel && d.hold_speed == o.hold_speed &&
 	         d.start_speed == o.start_speed && d.hold_recent == o.hold_recent && d.coast == o.coast && d.coast_after == o.coast_after && d.coast_max == o.coast_max &&
 	         d.coast_speed == o.coast_speed && d.blend == o.blend && d.ease_min == o.ease_min && d.gap_blend == o.gap_blend && d.gap_blend_min == o.gap_blend_min && d.predict_travel == o.predict_travel); }
@@ -205,15 +205,26 @@ int main(void) {
 	slot = 0; up(t + 210 * MS, 0); run_until(t + 400 * MS); assert(ups == 1);
 
 	{ int split = 0, cases = 0;
-	  for (int v = 150; v <= 450; v += 100) for (int dt = 20; dt <= 40; dt += 10) for (int k = 2; k <= 3; k++) for (int gap = 40; gap <= 70; gap += 15) {
+	  for (int v = 150; v <= 450; v += 100) for (int dt = 20; dt <= 40; dt += 10) for (int k = 2; k <= 3; k++) for (int gap = 40; gap <= 70; gap += 15) for (int back = 0; back <= 2; back++) {
 	      reset(); t += 500 * MS; down(t, 0, 50, 100, 200); drain(t);
 	      double x = 100, y = 200; t = drag(t, 0, &x, &y, v, 0, k, dt * MS);
 	      if (x - 100 >= 12) continue;
 	      t += 5 * MS; run_until(t); up(t, 0); drain(t);
-	      t += gap * MS; run_until(t); x += v * (gap + 5) / 1000.0; down(t, 0, 51, (int)x, 200); drain(t);
+	      t += gap * MS; run_until(t); x += back == 2 ? v * (gap + 5) / 1000.0 : back - 1; down(t, 0, 51, (int)x, 200); drain(t);
 	      t = drag(t, 0, &x, &y, v, 0, 4, dt * MS); up(t, 0); drain(t); run_until(t + 400 * MS); t += 400 * MS;
 	      cases++; split += downs > 1; }
-	  printf("false lift inside the tap radius of a slow drag (%d cases): split %d\n", cases, split); assert(cases >= 10 && split == 0); }
+	  printf("false lift inside the tap radius of a slow drag, finger back 1 px behind, on the last sample or ahead (%d cases): split %d\n", cases, split); assert(cases >= 30 && split == 0); }
+
+	{ int64_t late[2];
+	  for (int k = 0; k < 2; k++) {
+	      o.tap_hold = k ? 30 * MS : o.lift_hold;
+	      reset(); t += 500 * MS; down(t, 0, 60, 200, 200); drain(t);
+	      double x = 200, y = 200; t = drag(t, 0, &x, &y, 300, 0, 3, 10 * MS);
+	      up(t, 0); drain(t); int64_t u = t; while (ups == 0 && clock_t0 < u + 300 * MS) run_until(clock_t0 + o.period);
+	      late[k] = clock_t0 - u; run_until(t + 400 * MS); t += 400 * MS; }
+	  o.tap_hold = o.lift_hold;
+	  printf("held sloppy tap released after %lld ms, with TAP_LIFT_MS 30 after %lld ms\n", (long long)(late[0] / MS), (long long)(late[1] / MS));
+	  assert(late[0] >= 70 * MS && late[1] <= 40 * MS); }
 
 	{ int worst = 0, cases = 0;
 	  for (int slide = 2; slide <= 12; slide++) for (int ph = 0; ph < 8; ph++) for (int steps = 2; steps <= 4; steps++) {
