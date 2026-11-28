@@ -459,6 +459,10 @@ velocity(const struct contact *c, double *vx, double *vy)
         return 0;
     *vx = stx / stt;
     *vy = sty / stt;
+    if (n > 2 && *vx * (s[n - 1].x - s[n - 2].x) + *vy * (s[n - 1].y - s[n - 2].y) < 0) {
+        *vx = *vy = 0;
+        return 0;
+    }
     return sqrt(*vx * *vx + *vy * *vy);
 }
 
@@ -490,7 +494,10 @@ release(int slot)
     int blended = c->blend || c->offset_x != 0 || c->offset_y != 0;
     double dx = 0, dy = 0;
 
-    if (prev) {
+    if (prev && c->coasting && (c->vx != 0 || c->vy != 0)) {
+        dx = c->vx;
+        dy = c->vy;
+    } else if (prev) {
         dx = c->dir_x;
         dy = c->dir_y;
         if (dx == 0 && dy == 0)
@@ -500,7 +507,7 @@ release(int slot)
 
     c->releasing = 0;
     c->coasting = 0;
-    if (last && (blended || (c->predicted && c->fresh) ? !ahead : !c->predicted))
+    if (last && (blended || c->predicted ? !ahead : 1))
         emit_position(slot, clamp(last->x, min_x, max_x), clamp(last->y, min_y, max_y));
     c->fresh = 0;
     c->blend = 0;
@@ -601,8 +608,10 @@ handle_frame(int64_t time)
             c->dirty = 0;
             c->fresh = 1;
             c->blend = 1;
-            c->dir_x = c->vx;
-            c->dir_y = c->vy;
+            if (c->vx != 0 || c->vy != 0) {
+                c->dir_x = c->vx;
+                c->dir_y = c->vy;
+            }
             add_sample(c, time);
         } else if (c->started) {
             int held = c->active;
@@ -662,9 +671,11 @@ handle_frame(int64_t time)
                 (double)(c->x - last_x) * (c->x - last_x) + (double)(c->y - last_y) * (c->y - last_y) >
                     (double)opts->rejoin_min * opts->rejoin_min)
                 c->blend = 1;
-            if (c->x != last_x || c->y != last_y) {
-                c->dir_x = c->x - last_x;
-                c->dir_y = c->y - last_y;
+            double mx = c->x - last_x, my = c->y - last_y;
+
+            if ((mx != 0 || my != 0) && (mx * c->dir_x + my * c->dir_y >= 0 || mx * mx + my * my > 16)) {
+                c->dir_x = mx;
+                c->dir_y = my;
             }
             add_sample(c, time);
         }
@@ -839,7 +850,8 @@ resample(const struct options *options, int64_t now)
             c->offset_y *= decay;
             if (c->offset_x > -0.5 && c->offset_x < 0.5 && c->offset_y > -0.5 && c->offset_y < 0.5)
                 c->offset_x = c->offset_y = 0;
-            c->predicted = 1;
+            else
+                c->predicted = 1;
         }
         c->fresh = 0;
         emit_position(slot, clamp(x, min_x, max_x), clamp(y, min_y, max_y));

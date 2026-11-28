@@ -29,6 +29,7 @@ static double max_step;
 static int release_back_steps;
 static double release_back_worst;
 static double *release_delays;
+static double *release_offsets;
 static int nrelease;
 static double *tap_delays;
 static int ntap;
@@ -69,6 +70,22 @@ build_points(void)
 }
 
 static int
+last_move(int64_t t, double *x, double *y, double *dx, double *dy)
+{
+    int i = npoints - 1;
+
+    while (i >= 0 && (points[i].time > t || !points[i].touch))
+        i--;
+    if (i < 1 || !points[i - 1].touch)
+        return 0;
+    *x = points[i].x;
+    *y = points[i].y;
+    *dx = points[i].x - points[i - 1].x;
+    *dy = points[i].y - points[i - 1].y;
+    return 1;
+}
+
+static int
 raw_position(int64_t t, double *x, double *y)
 {
     for (int i = 1; i < npoints; i++) {
@@ -104,12 +121,16 @@ drain(int64_t t, int tick)
                 continue;
             if (e[i].code == ABS_MT_TRACKING_ID) {
                 if (e[i].value < 0) {
+                    double lx, ly, mx, my;
+                    int moved = last_move(t, &lx, &ly, &mx, &my);
+
+                    if (moved)
+                        release_offsets[nrelease] = sqrt((out_x - lx) * (out_x - lx) + (out_y - ly) * (out_y - ly));
+                    else
+                        release_offsets[nrelease] = 0;
                     if (prev_x >= 0 && have_prev_step) {
                         double sx = out_x - prev_x, sy = out_y - prev_y, step = sqrt(sx * sx + sy * sy);
-
-                        double ax, ay, bx, by;
-                        int against_stroke = raw_position(t, &ax, &ay) && raw_position(t - 50 * NSEC_PER_MSEC, &bx, &by) &&
-                                             sx * (ax - bx) + sy * (ay - by) < 0;
+                        int against_stroke = moved && sx * mx + sy * my < 0;
 
                         if ((sx * prev_dx + sy * prev_dy < 0 || against_stroke) && step > 3) {
                             release_back_steps++;
@@ -290,6 +311,7 @@ main(int argc, char **argv)
     timer = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
     errors = malloc((size_t)(raws[nraw - 1].time - raws[0].time) / (size_t)period * sizeof(double) + 1024);
     release_delays = malloc(nraw * sizeof(double));
+    release_offsets = malloc(nraw * sizeof(double));
     tap_delays = malloc(nraw * sizeof(double));
 
     int raw_strokes = 0, raw_short_gaps = 0;
@@ -328,6 +350,7 @@ main(int argc, char **argv)
     printf("path error vs raw change points: p50 %.1f p95 %.1f max %.1f px\n", pct(errors, nerrors, .5), pct(errors, nerrors, .95), pct(errors, nerrors, 1));
     printf("steps: max %.1f px, jerks (acceleration > 6 px/tick^2) %d, stalls (finger moved, output did not) %d\n", max_step, jerks, stalls);
     printf("release frames stepping back more than 3 px: %d, worst %.1f px\n", release_back_steps, release_back_worst);
+    printf("release distance from the last raw position: p50 %.1f p95 %.1f max %.1f px\n", pct(release_offsets, nrelease, .5), pct(release_offsets, nrelease, .95), pct(release_offsets, nrelease, 1));
     printf("release after last touch sample: p50 %.0f p95 %.0f max %.0f ms\n", pct(release_delays, nrelease, .5), pct(release_delays, nrelease, .95), pct(release_delays, nrelease, 1));
     printf("tap release after last pressed read: n %d p50 %.0f max %.0f ms\n", ntap, pct(tap_delays, ntap, .5), pct(tap_delays, ntap, 1));
     return 0;

@@ -284,6 +284,27 @@ int main(void) {
 	  printf("lift %d ms after a rejoin %+d px from the last sample, behind the coast: shown %d, released at %d\n", after, land, pre, outx[0]); assert(outx[0] >= pre);
 	  run_until(t + 400 * MS); t += 400 * MS; }
 
+	{ int bad = 0;
+	  for (int ph = 0; ph < 84; ph++) {
+	    reset(); t += 500 * MS; t -= t % o.period; t += clock_t0 % o.period; down(t, 1, 54, 450, 20); drain(t);
+	    int64_t end = t + 300 * MS + ph * 100000LL, ts[] = { -207800, -116100, -69300, -11100 }; int xs[] = { 68, 189, 250, 327 }, ys[] = { 141, 131, 126, 120 };
+	    run_until(end + ts[0] * 1000); down(end + ts[0] * 1000, 0, 55, xs[0], ys[0]); drain(end + ts[0] * 1000);
+	    for (int i = 1; i < 4; i++) { run_until(end + ts[i] * 1000); move(end + ts[i] * 1000, 0, xs[i], ys[i]); drain(end + ts[i] * 1000); }
+	    run_until(end); up(end, 0); drain(end); if (outx[0] != 327) bad++;
+	    up(end, 1); drain(end); run_until(end + 300 * MS); t = end + 300 * MS; }
+	  printf("two fingers, lift right after a gap blend settled, all tick phases: %d of 84 short of the finger\n", bad); assert(!bad); }
+	{ reset(); t += 500 * MS; int64_t a = t; down(a, 0, 56, 220, 240); drain(a);
+	  run_until(a + 40 * MS); move(a + 40 * MS, 0, 160, 240); drain(a + 40 * MS);
+	  run_until(a + 80 * MS); move(a + 80 * MS, 0, 98, 240); drain(a + 80 * MS);
+	  run_until(a + 110 * MS); move(a + 110 * MS, 0, 133, 240); drain(a + 110 * MS);
+	  run_until(a + 170 * MS); up(a + 170 * MS, 0); drain(a + 170 * MS); run_until(a + 500 * MS);
+	  printf("finger turns back, then lifts: released at %d, last sample 133\n", outx[0]); assert(outx[0] >= 128); t = a + 500 * MS; }
+	{ reset(); t += 500 * MS; int64_t a = t; down(a, 0, 57, 240, 310); drain(a);
+	  run_until(a + 33 * MS); move(a + 33 * MS, 0, 246, 311); drain(a + 33 * MS);
+	  run_until(a + 182 * MS); move(a + 182 * MS, 0, 466, 333); drain(a + 182 * MS);
+	  run_until(a + 185 * MS); up(a + 185 * MS, 0); drain(a + 185 * MS); run_until(a + 600 * MS);
+	  printf("held lift during a gap blend: released at %d, last sample 466\n", outx[0]); assert(outx[0] >= 466); t = a + 600 * MS; }
+
 	setenv("WALLVIEW_TOUCH_X", "1e13", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "nan", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "abc", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
