@@ -353,6 +353,10 @@ read_vblank(void)
         if ((size_t)size < sizeof(events))
             break;
     }
+    if (size < 0 && errno != EAGAIN && errno != EINTR) {
+        close_drm();
+        return 0;
+    }
     if (latest) {
         vblank_pending = 0;
         if (timer_armed == 2)
@@ -742,6 +746,8 @@ read_slots(int code, int32_t *values)
         int32_t values[MAX_SLOTS];
     } slots = { .code = code };
 
+    for (int slot = 0; slot < MAX_SLOTS; slot++)
+        slots.values[slot] = code == ABS_MT_TRACKING_ID ? -1 : 0;
     if (ioctl(input_fd, EVIOCGMTSLOTS(sizeof(slots)), &slots) < 0)
         return -1;
     memcpy(values, slots.values, sizeof(slots.values));
