@@ -88,6 +88,7 @@ struct options {
     double blend;
     int64_t ease_min;
     int64_t gap_blend;
+    int64_t gap_blend_min;
     int predict_travel;
     int debug;
     int vblank;
@@ -636,10 +637,13 @@ handle_frame(int64_t time)
             }
         } else if (c->dirty) {
             int64_t gap = c->samples ? time - c->history[c->samples - 1].time : 0;
+            int last_x = c->samples ? c->history[c->samples - 1].x : c->x;
+            int last_y = c->samples ? c->history[c->samples - 1].y : c->y;
 
             c->dirty = 0;
             c->fresh = 1;
-            if (gap > opts->hold_recent && gap < opts->gap_blend)
+            if (gap > opts->gap_blend_min && gap < opts->gap_blend &&
+                abs(c->x - last_x) + abs(c->y - last_y) > opts->rejoin_min)
                 c->blend = 1;
             add_sample(c, time);
         }
@@ -781,19 +785,19 @@ resample(const struct options *options, int64_t now)
                 predict(c, last, target, &x, &y);
             c->predicted = x != last->x || y != last->y;
         }
+        int64_t step = timer_armed == 2 ? frame : opts->period;
+        double decay = step != opts->period ? pow(opts->blend, (double)step / opts->period) : opts->blend;
+
         if (c->blend) {
             c->blend = 0;
             if (c->emitted_x >= 0) {
-                c->offset_x = c->emitted_x - x;
-                c->offset_y = c->emitted_y - y;
+                c->offset_x = (c->emitted_x - x) * decay;
+                c->offset_y = (c->emitted_y - y) * decay;
             }
         }
         if (c->offset_x != 0 || c->offset_y != 0) {
             x = round_half_away(x + c->offset_x);
             y = round_half_away(y + c->offset_y);
-            int64_t step = timer_armed == 2 ? frame : opts->period;
-            double decay = step != opts->period ? pow(opts->blend, (double)step / opts->period) : opts->blend;
-
             c->offset_x *= decay;
             c->offset_y *= decay;
             if (c->offset_x > -0.5 && c->offset_x < 0.5 && c->offset_y > -0.5 && c->offset_y < 0.5)
@@ -812,7 +816,7 @@ resample(const struct options *options, int64_t now)
 }
 
 static int dropped;
-static int input_fd;
+static int input_fd = -1;
 
 static int
 read_slots(int code, int32_t *values)
@@ -852,12 +856,20 @@ resync(int64_t time, int *slot)
     struct input_absinfo current_slot;
     int32_t ids[MAX_SLOTS];
 
-    if (ioctl(input_fd, EVIOCGABS(ABS_MT_SLOT), &current_slot) == 0 && current_slot.value >= 0 &&
-        current_slot.value < MAX_SLOTS)
-        *slot = current_slot.value;
-    if (read_slots(ABS_MT_TRACKING_ID, ids) < 0)
-        return;
-    load_positions();
+    for (int tries = 0;; tries++) {
+        struct input_event late[64];
+
+        if (ioctl(input_fd, EVIOCGABS(ABS_MT_SLOT), &current_slot) == 0 && current_slot.value >= 0 &&
+            current_slot.value < MAX_SLOTS)
+            *slot = current_slot.value;
+        if (read_slots(ABS_MT_TRACKING_ID, ids) < 0)
+            return;
+        load_positions();
+        if (tries == 8 || input_fd < 0 || read(input_fd, late, sizeof(late)) <= 0)
+            break;
+        while (read(input_fd, late, sizeof(late)) > 0)
+            ;
+    }
     for (int slot = 0; slot < MAX_SLOTS; slot++) {
         struct contact *c = &contacts[slot];
 
@@ -1038,6 +1050,7 @@ load_options(struct options *options)
         .blend = env_number("WALLVIEW_TOUCH_BLEND", 0.7),
         .ease_min = env_ms("WALLVIEW_TOUCH_PREDICT_EASE_MS", 100),
         .gap_blend = env_ms("WALLVIEW_TOUCH_GAP_BLEND_MS", 280),
+        .gap_blend_min = env_ms("WALLVIEW_TOUCH_GAP_BLEND_MIN_MS", 60),
         .predict_travel = (int)env_number("WALLVIEW_TOUCH_PREDICT_TRAVEL_PX", 6),
         .debug = (int)env_number("WALLVIEW_TOUCH_DEBUG", 0),
         .vblank = (int)env_number("WALLVIEW_TOUCH_VBLANK", 0),

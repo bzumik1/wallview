@@ -42,7 +42,7 @@ static void defaults(void) {
 	setenv("WALLVIEW_TOUCH_LIFT_MS", "", 1);
 	o = (struct options){ .period = NSEC_PER_SEC / 120, .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 16), .max_prediction = 30 * MS, .max_sample_gap = 150 * MS,
 		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 12, .start_travel = 8, .hold_speed = 60, .start_speed = 150,
-		.hold_recent = 100 * MS, .coast = 250 * MS, .coast_after = 85 * MS, .coast_max = 80, .coast_speed = 150, .blend = 0.7, .ease_min = 100 * MS, .gap_blend = 280 * MS, .predict_travel = 6, .debug = getenv("DBG") != NULL };
+		.hold_recent = 100 * MS, .coast = 250 * MS, .coast_after = 85 * MS, .coast_max = 80, .coast_speed = 150, .blend = 0.7, .ease_min = 100 * MS, .gap_blend = 280 * MS, .gap_blend_min = 60 * MS, .predict_travel = 6, .debug = getenv("DBG") != NULL };
 }
 static int64_t drag(int64_t t, int sl, double *x, double *y, double vx, double vy, int n, int64_t dt) {
 	for (int i = 0; i < n; i++) { t += dt; run_until(t); *x += vx * dt / NSEC_PER_SEC; *y += vy * dt / NSEC_PER_SEC; move(t, sl, (int)*x, (int)*y); drain(t); }
@@ -56,7 +56,7 @@ int main(void) {
 	  assert(d.period == o.period && d.latency == o.latency && d.max_prediction == o.max_prediction && d.max_sample_gap == o.max_sample_gap && d.lift_hold == o.lift_hold &&
 	         d.rejoin_min == o.rejoin_min && d.rejoin_slack == o.rejoin_slack && d.hold_travel == o.hold_travel && d.start_travel == o.start_travel && d.hold_speed == o.hold_speed &&
 	         d.start_speed == o.start_speed && d.hold_recent == o.hold_recent && d.coast == o.coast && d.coast_after == o.coast_after && d.coast_max == o.coast_max &&
-	         d.coast_speed == o.coast_speed && d.blend == o.blend && d.ease_min == o.ease_min && d.gap_blend == o.gap_blend && d.predict_travel == o.predict_travel); }
+	         d.coast_speed == o.coast_speed && d.blend == o.blend && d.ease_min == o.ease_min && d.gap_blend == o.gap_blend && d.gap_blend_min == o.gap_blend_min && d.predict_travel == o.predict_travel); }
 	int64_t t = 1000 * MS; clock_t0 = t; double x, y;
 
 	reset(); x = 50; y = 240; down(t, 0, 1, 50, 240); drain(t);
@@ -187,6 +187,8 @@ int main(void) {
 	  printf("pressure-only frame on a resting finger: timer armed %d\n", timer_armed); assert(timer_armed == 0);
 	  t += 300 * MS; move(t, 0, 140, 100); drain(t);
 	  printf("first move after a rest is sent at once: x %d\n", outx[0]); assert(outx[0] == 140);
+	  t += 200 * MS; run_until(t); move(t, 0, 143, 100); drain(t);
+	  printf("small first move after a 200 ms rest is sent at once: x %d\n", outx[0]); assert(outx[0] == 143);
 	  up(t + 10 * MS, 0); run_until(t + 300 * MS); t += 300 * MS;
 	  reset(); down(t, 0, 35, 200, 240); down(t, 1, 36, 280, 240); drain(t);
 	  { double ax0 = 200, ay0 = 240, bx = 280, by = 240;
@@ -214,9 +216,9 @@ int main(void) {
 
 	reset(); t += 500 * MS; x = 40; y = 240; down(t, 0, 44, 40, 240); drain(t);
 	t = drag(t, 0, &x, &y, 500, 0, 6, 25 * MS);
-	{ double before = maxstep; maxstep = 0; t += 200 * MS; run_until(t); x += 100; move(t, 0, (int)x, 240); drain(t);
+	for (int g = 70; g <= 200; g += 130) { double before = maxstep; maxstep = 0; t += g * MS; run_until(t); x += 100; move(t, 0, (int)x, 240); drain(t);
 	  t = drag(t, 0, &x, &y, 500, 0, 4, 25 * MS);
-	  printf("jump after a gap the kernel bridged: largest step %.0f px (before the gap %.0f)\n", maxstep, before); assert(maxstep < 40); }
+	  printf("jump after a %d ms gap the kernel bridged: largest step %.0f px (before the gap %.0f)\n", g, maxstep, before); assert(maxstep < 40); }
 	up(t, 0); run_until(t + 300 * MS); t += 300 * MS;
 
 	setenv("WALLVIEW_TOUCH_X", "1e13", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
