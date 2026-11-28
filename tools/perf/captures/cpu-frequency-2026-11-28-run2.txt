@@ -1,0 +1,234 @@
+start Sat Nov 28 11:05:46 CET 2026 6.18.63-dirty
+1416000 round 1 ok 4 bad 0 crash 0 temp 74 Iterations/Sec : 3697.996918
+1416000 round 2 ok 8 bad 0 crash 0 temp 76 Iterations/Sec : 3668.378577
+1416000 round 3 ok 12 bad 0 crash 0 temp 76 Iterations/Sec : 3644.757624
+1416000 round 4 ok 16 bad 0 crash 0 temp 75 Iterations/Sec : 3583.587171
+1416000 round 5 ok 20 bad 0 crash 0 temp 75 Iterations/Sec : 3562.310752
+1416000 round 6 ok 24 bad 0 crash 0 temp 74 Iterations/Sec : 3538.361739
+1416000 round 7 ok 28 bad 0 crash 0 temp 75 Iterations/Sec : 3515.762334
+1416000 round 8 ok 32 bad 0 crash 0 temp 76 Iterations/Sec : 3504.672897
+1416000 round 9 ok 36 bad 0 crash 0 temp 76 Iterations/Sec : 3504.058868
+1416000 round 10 ok 40 bad 0 crash 0 temp 75 Iterations/Sec : 3482.500435
+1416000 round 11 ok 44 bad 0 crash 0 temp 76 Iterations/Sec : 3385.622390
+1416000 round 12 ok 48 bad 0 crash 0 temp 76 Iterations/Sec : 3404.641661
+1416000 round 13 ok 52 bad 0 crash 0 temp 77 Iterations/Sec : 3448.672261
+1416000 round 14 ok 56 bad 0 crash 0 temp 75 Iterations/Sec : 3379.900856
+1416000 round 15 ok 60 bad 0 crash 0 temp 76 Iterations/Sec : 3373.629463
+1416000 round 16 ok 64 bad 0 crash 0 temp 75 Iterations/Sec : 3460.606760
+1416000 round 17 ok 68 bad 0 crash 0 temp 77 Iterations/Sec : 3459.409594
+1416000 round 18 ok 72 bad 0 crash 0 temp 75 Iterations/Sec : 3433.279927
+1416000 round 19 ok 76 bad 0 crash 0 temp 75 Iterations/Sec : 3439.775268
+1416000 round 20 ok 80 bad 0 crash 0 temp 76 Iterations/Sec : 3423.680456
+1416000 round 21 ok 84 bad 0 crash 0 temp 75 Iterations/Sec : 3431.905279
+1416000 round 22 ok 88 bad 0 crash 0 temp 76 Iterations/Sec : 3446.889183
+1416000 round 23 ok 92 bad 0 crash 0 temp 76 Iterations/Sec : 3425.830764
+1416000 round 24 ok 96 bad 0 crash 0 temp 76 Iterations/Sec : 3425.244049
+1416000 round 25 ok 100 bad 0 crash 0 temp 75 Iterations/Sec : 3437.213566
+1416000 round 26 ok 104 bad 0 crash 0 temp 76 Iterations/Sec : 3428.963310
+1416000 round 27 ok 108 bad 0 crash 0 temp 76 Iterations/Sec : 3359.462486
+1416000 round 28 ok 112 bad 0 crash 0 temp 75 Iterations/Sec : 3336.670003
+1416000 round 29 ok 116 bad 0 crash 0 temp 77 Iterations/Sec : 3488.372093
+1416000 round 30 ok 120 bad 0 crash 0 temp 76 Iterations/Sec : 3443.130954
+1416000 round 31 ok 124 bad 0 crash 0 temp 76 Iterations/Sec : 3429.747342
+1416000 round 32 ok 128 bad 0 crash 0 temp 76 Iterations/Sec : 3356.643357
+1416000 round 33 ok 132 bad 0 crash 0 temp 76 Iterations/Sec : 3499.562555
+1416000 round 34 ok 136 bad 0 crash 0 temp 77 Iterations/Sec : 3507.746273
+1416000 round 35 ok 140 bad 0 crash 0 temp 76 Iterations/Sec : 3427.004798
+1416000 round 36 ok 144 bad 0 crash 0 temp 75 Iterations/Sec : 3276.361055
+1416000 round 37 ok 148 bad 0 crash 0 temp 74 Iterations/Sec : 3436.229311
+1416000 round 38 ok 152 bad 0 crash 0 temp 77 Iterations/Sec : 3493.856635
+1416000 round 39 ok 156 bad 0 crash 0 temp 77 Iterations/Sec : 3334.444815
+1416000 round 40 ok 160 bad 0 crash 0 temp 76 Iterations/Sec : 3295.978906
+1416000 round 41 ok 164 bad 0 crash 0 temp 78 Iterations/Sec : 3500.991948
+1416000 round 42 ok 168 bad 0 crash 0 temp 76 Iterations/Sec : 3415.883860
+1416000 round 43 ok 172 bad 0 crash 0 temp 78 Iterations/Sec : 3505.287141
+1416000 round 44 ok 176 bad 0 crash 0 temp 76 Iterations/Sec : 3417.245700
+1416000 round 45 ok 180 bad 0 crash 0 temp 75 Iterations/Sec : 3478.865890
+1416000 round 46 ok 184 bad 0 crash 0 temp 76 Iterations/Sec : 3418.024382
+1416000 round 47 ok 188 bad 0 crash 0 temp 75 Iterations/Sec : 3403.869065
+1416000 round 48 ok 192 bad 0 crash 0 temp 78 Iterations/Sec : 3504.672897
+1416000 round 49 ok 196 bad 0 crash 0 temp 76 Iterations/Sec : 3363.228700
+1416000 round 50 ok 200 bad 0 crash 0 temp 76 Iterations/Sec : 3400.782180
+1416000 round 51 ok 204 bad 0 crash 0 temp 78 Iterations/Sec : 3478.260870
+1416000 round 52 ok 208 bad 0 crash 0 temp 76 Iterations/Sec : 3401.553376
+1416000 round 53 ok 212 bad 0 crash 0 temp 75 Iterations/Sec : 3394.625177
+1416000 round 54 ok 216 bad 0 crash 0 temp 76 Iterations/Sec : 3397.700889
+1416000 round 55 ok 220 bad 0 crash 0 temp 78 Iterations/Sec : 3293.807642
+1416000 round 56 ok 224 bad 0 crash 0 temp 77 Iterations/Sec : 3424.266636
+1416000 round 57 ok 228 bad 0 crash 0 temp 78 Iterations/Sec : 3486.547737
+1416000 round 58 ok 232 bad 0 crash 0 temp 78 Iterations/Sec : 3495.484999
+1416000 round 59 ok 236 bad 0 crash 0 temp 79 Iterations/Sec : 3465.203581
+1416000 round 60 ok 240 bad 0 crash 0 temp 76 Iterations/Sec : 3388.681803
+1416000 round 61 ok 244 bad 0 crash 0 temp 76 Iterations/Sec : 3402.324922
+1416000 round 62 ok 248 bad 0 crash 0 temp 78 Iterations/Sec : 3474.232774
+1416000 round 63 ok 252 bad 0 crash 0 temp 77 Iterations/Sec : 3487.155643
+1416000 round 64 ok 256 bad 0 crash 0 temp 77 Iterations/Sec : 3296.250515
+1416000 round 65 ok 260 bad 0 crash 0 temp 76 Iterations/Sec : 3489.386450
+1416000 round 66 ok 264 bad 0 crash 0 temp 78 Iterations/Sec : 3491.416933
+1416000 round 67 ok 268 bad 0 crash 0 temp 76 Iterations/Sec : 3477.252970
+1416000 round 68 ok 272 bad 0 crash 0 temp 78 Iterations/Sec : 3318.400531
+1416000 round 69 ok 276 bad 0 crash 0 temp 76 Iterations/Sec : 3300.330033
+1416000 round 70 ok 280 bad 0 crash 0 temp 77 Iterations/Sec : 3484.118228
+1416000 round 71 ok 284 bad 0 crash 0 temp 74 Iterations/Sec : 3312.355084
+1416000 round 72 ok 288 bad 0 crash 0 temp 76 Iterations/Sec : 3417.829678
+1416000 round 73 ok 292 bad 0 crash 0 temp 78 Iterations/Sec : 3506.721216
+1416000 round 74 ok 296 bad 0 crash 0 temp 75 Iterations/Sec : 3500.991948
+1416000 round 75 ok 300 bad 0 crash 0 temp 77 Iterations/Sec : 3304.328671
+1416000 round 76 ok 304 bad 0 crash 0 temp 77 Iterations/Sec : 3379.520108
+1416000 round 77 ok 308 bad 0 crash 0 temp 76 Iterations/Sec : 3379.139446
+1416000 round 78 ok 312 bad 0 crash 0 temp 76 Iterations/Sec : 3300.330033
+1416000 round 79 ok 316 bad 0 crash 0 temp 77 Iterations/Sec : 3377.047335
+1416000 round 80 ok 320 bad 0 crash 0 temp 78 Iterations/Sec : 3281.378179
+1416000 round 81 ok 324 bad 0 crash 0 temp 79 Iterations/Sec : 3459.210147
+1416000 round 82 ok 328 bad 0 crash 0 temp 78 Iterations/Sec : 3494.263584
+1416000 round 83 ok 332 bad 0 crash 0 temp 78 Iterations/Sec : 3292.452054
+1416000 round 84 ok 336 bad 0 crash 0 temp 77 Iterations/Sec : 3405.221339
+1416000 round 85 ok 340 bad 0 crash 0 temp 78 Iterations/Sec : 3501.809268
+1416000 round 86 ok 344 bad 0 crash 0 temp 78 Iterations/Sec : 3481.490078
+1416000 round 87 ok 348 bad 0 crash 0 temp 78 Iterations/Sec : 3493.856635
+1416000 round 88 ok 352 bad 0 crash 0 temp 77 Iterations/Sec : 3450.060376
+1416000 round 89 ok 356 bad 0 crash 0 temp 78 Iterations/Sec : 3293.807642
+1416000 round 90 ok 360 bad 0 crash 0 temp 78 Iterations/Sec : 3480.480306
+1416000 round 91 ok 364 bad 0 crash 0 temp 78 Iterations/Sec : 3292.181070
+1416000 round 92 ok 368 bad 0 crash 0 temp 77 Iterations/Sec : 3472.825143
+1416000 round 93 ok 372 bad 0 crash 0 temp 77 Iterations/Sec : 3332.777870
+1416000 round 94 ok 376 bad 0 crash 0 temp 76 Iterations/Sec : 3326.311121
+1416000 round 95 ok 380 bad 0 crash 0 temp 74 Iterations/Sec : 3338.340845
+1416000 round 96 ok 384 bad 0 crash 0 temp 77 Iterations/Sec : 3410.835086
+1416000 round 97 ok 388 bad 0 crash 0 temp 78 Iterations/Sec : 3492.433062
+1416000 round 98 ok 392 bad 0 crash 0 temp 77 Iterations/Sec : 3483.915921
+1416000 round 99 ok 396 bad 0 crash 0 temp 79 Iterations/Sec : 3487.155643
+1416000 round 100 ok 400 bad 0 crash 0 temp 76 Iterations/Sec : 3413.551801
+1416000 round 101 ok 404 bad 0 crash 0 temp 78 Iterations/Sec : 3488.980636
+1416000 round 102 ok 408 bad 0 crash 0 temp 78 Iterations/Sec : 3489.183531
+1416000 round 103 ok 412 bad 0 crash 0 temp 76 Iterations/Sec : 3420.362558
+1416000 round 104 ok 416 bad 0 crash 0 temp 78 Iterations/Sec : 3299.241175
+1416000 round 105 ok 420 bad 0 crash 0 temp 77 Iterations/Sec : 3309.340614
+1416000 round 106 ok 424 bad 0 crash 0 temp 77 Iterations/Sec : 3463.003578
+1416000 round 107 ok 428 bad 0 crash 0 temp 77 Iterations/Sec : 3405.607901
+1416000 round 108 ok 432 bad 0 crash 0 temp 76 Iterations/Sec : 3375.717340
+1416000 round 109 ok 436 bad 0 crash 0 temp 79 Iterations/Sec : 3381.805884
+1416000 round 110 ok 440 bad 0 crash 0 temp 77 Iterations/Sec : 3450.457186
+1416000 round 111 ok 444 bad 0 crash 0 temp 77 Iterations/Sec : 3367.570298
+1416000 round 112 ok 448 bad 0 crash 0 temp 78 Iterations/Sec : 3253.619652
+1416000 round 113 ok 452 bad 0 crash 0 temp 78 Iterations/Sec : 3309.614430
+1416000 round 114 ok 456 bad 0 crash 0 temp 77 Iterations/Sec : 3471.820391
+1416000 round 115 ok 460 bad 0 crash 0 temp 76 Iterations/Sec : 3382.187148
+1416000 round 116 ok 464 bad 0 crash 0 temp 75 Iterations/Sec : 3282.994091
+1416000 round 117 ok 468 bad 0 crash 0 temp 76 Iterations/Sec : 3368.704733
+1416000 round 118 ok 472 bad 0 crash 0 temp 76 Iterations/Sec : 3381.234150
+1416000 round 119 ok 476 bad 0 crash 0 temp 75 Iterations/Sec : 3391.363328
+1416000 round 120 ok 480 bad 0 crash 0 temp 80 Iterations/Sec : 3492.636358
+1416000 round 121 ok 484 bad 0 crash 0 temp 76 Iterations/Sec : 3385.049365
+1416000 round 122 ok 488 bad 0 crash 0 temp 78 Iterations/Sec : 3280.301788
+1416000 round 123 ok 492 bad 0 crash 0 temp 78 Iterations/Sec : 3485.940042
+1416000 round 124 ok 496 bad 0 crash 0 temp 77 Iterations/Sec : 3399.433428
+1416000 round 125 ok 500 bad 0 crash 0 temp 78 Iterations/Sec : 3483.915921
+1416000 round 126 ok 504 bad 0 crash 0 temp 77 Iterations/Sec : 3266.639445
+1416000 round 127 ok 508 bad 0 crash 0 temp 75 Iterations/Sec : 3398.085745
+1416000 round 128 ok 512 bad 0 crash 0 temp 78 Iterations/Sec : 3478.865890
+1416000 round 129 ok 516 bad 0 crash 0 temp 76 Iterations/Sec : 3468.408579
+1416000 round 130 ok 520 bad 0 crash 0 temp 76 Iterations/Sec : 3484.118228
+1416000 round 131 ok 524 bad 0 crash 0 temp 78 Iterations/Sec : 3480.884145
+1416000 round 132 ok 528 bad 0 crash 0 temp 78 Iterations/Sec : 3453.436169
+1416000 round 133 ok 532 bad 0 crash 0 temp 76 Iterations/Sec : 3290.375651
+1416000 round 134 ok 536 bad 0 crash 0 temp 78 Iterations/Sec : 3465.804067
+1416000 round 135 ok 540 bad 0 crash 0 temp 78 Iterations/Sec : 3484.320557
+1416000 round 136 ok 544 bad 0 crash 0 temp 77 Iterations/Sec : 3483.915921
+1416000 round 137 ok 548 bad 0 crash 0 temp 78 Iterations/Sec : 3487.763762
+1416000 round 138 ok 552 bad 0 crash 0 temp 77 Iterations/Sec : 3381.805884
+1416000 round 139 ok 556 bad 0 crash 0 temp 74 Iterations/Sec : 3313.452618
+1416000 round 140 ok 560 bad 0 crash 0 temp 76 Iterations/Sec : 3413.746017
+1416000 round 141 ok 564 bad 0 crash 0 temp 77 Iterations/Sec : 3454.629203
+1416000 round 142 ok 568 bad 0 crash 0 temp 78 Iterations/Sec : 3492.433062
+1416000 round 143 ok 572 bad 0 crash 0 temp 78 Iterations/Sec : 3487.763762
+1416000 round 144 ok 576 bad 0 crash 0 temp 77 Iterations/Sec : 3373.819163
+1416000 round 145 ok 580 bad 0 crash 0 temp 76 Iterations/Sec : 3389.447520
+1416000 round 146 ok 584 bad 0 crash 0 temp 78 Iterations/Sec : 3474.836393
+1416000 round 147 ok 588 bad 0 crash 0 temp 77 Iterations/Sec : 3464.403257
+1416000 round 148 ok 592 bad 0 crash 0 temp 77 Iterations/Sec : 3468.408579
+1416000 round 149 ok 596 bad 0 crash 0 temp 78 Iterations/Sec : 3261.578604
+1416000 round 150 ok 600 bad 0 crash 0 temp 78 Iterations/Sec : 3314.733993
+1416000 round 151 ok 604 bad 0 crash 0 temp 77 Iterations/Sec : 3490.198360
+1416000 round 152 ok 608 bad 0 crash 0 temp 76 Iterations/Sec : 3374.008885
+1416000 round 153 ok 612 bad 0 crash 0 temp 78 Iterations/Sec : 3465.603881
+1416000 round 154 ok 616 bad 0 crash 0 temp 78 Iterations/Sec : 3254.678600
+1416000 round 155 ok 620 bad 0 crash 0 temp 77 Iterations/Sec : 3374.388392
+1416000 round 156 ok 624 bad 0 crash 0 temp 77 Iterations/Sec : 3259.718034
+1416000 round 157 ok 628 bad 0 crash 0 temp 77 Iterations/Sec : 3275.734993
+1416000 round 158 ok 632 bad 0 crash 0 temp 77 Iterations/Sec : 3476.849974
+1416000 round 159 ok 636 bad 0 crash 0 temp 78 Iterations/Sec : 3499.562555
+1416000 round 160 ok 640 bad 0 crash 0 temp 78 Iterations/Sec : 3458.611944
+1416000 round 161 ok 644 bad 0 crash 0 temp 77 Iterations/Sec : 3292.000439
+1416000 round 162 ok 648 bad 0 crash 0 temp 77 Iterations/Sec : 3276.539974
+1416000 round 163 ok 652 bad 0 crash 0 temp 76 Iterations/Sec : 3283.353398
+1416000 round 164 ok 656 bad 0 crash 0 temp 76 Iterations/Sec : 3367.381300
+1416000 round 165 ok 660 bad 0 crash 0 temp 76 Iterations/Sec : 3267.617907
+1416000 round 166 ok 664 bad 0 crash 0 temp 78 Iterations/Sec : 3459.409594
+1416000 round 167 ok 668 bad 0 crash 0 temp 76 Iterations/Sec : 3387.533875
+1416000 round 168 ok 672 bad 0 crash 0 temp 76 Iterations/Sec : 3288.572212
+1416000 round 169 ok 676 bad 0 crash 0 temp 75 Iterations/Sec : 3385.622390
+1416000 round 170 ok 680 bad 0 crash 0 temp 76 Iterations/Sec : 3384.667456
+1416000 round 171 ok 684 bad 0 crash 0 temp 77 Iterations/Sec : 3466.204506
+1416000 round 172 ok 688 bad 0 crash 0 temp 78 Iterations/Sec : 3490.807540
+COREMARK 1416000: ok 688 bad 0 crash 0 after 172 rounds
+1416000 memory round 1 ok 1 bad 0 temp 73
+1416000 memory round 2 ok 2 bad 0 temp 75
+1416000 memory round 3 ok 3 bad 0 temp 76
+1416000 memory round 4 ok 4 bad 0 temp 76
+1416000 memory round 5 ok 5 bad 0 temp 76
+1416000 memory round 6 ok 6 bad 0 temp 75
+1416000 memory round 7 ok 7 bad 0 temp 78
+1416000 memory round 8 ok 8 bad 0 temp 75
+1416000 memory round 9 ok 9 bad 0 temp 76
+1416000 memory round 10 ok 10 bad 0 temp 76
+1416000 memory round 11 ok 11 bad 0 temp 75
+1416000 memory round 12 ok 12 bad 0 temp 75
+1416000 memory round 13 ok 13 bad 0 temp 76
+1416000 memory round 14 ok 14 bad 0 temp 77
+1416000 memory round 15 ok 15 bad 0 temp 77
+1416000 memory round 16 ok 16 bad 0 temp 76
+1416000 memory round 17 ok 17 bad 0 temp 78
+1416000 memory round 18 ok 18 bad 0 temp 76
+1416000 memory round 19 ok 19 bad 0 temp 77
+1416000 memory round 20 ok 20 bad 0 temp 76
+1416000 memory round 21 ok 21 bad 0 temp 77
+1416000 memory round 22 ok 22 bad 0 temp 78
+1416000 memory round 23 ok 23 bad 0 temp 75
+1416000 memory round 24 ok 24 bad 0 temp 77
+1416000 memory round 25 ok 25 bad 0 temp 77
+1416000 memory round 26 ok 26 bad 0 temp 76
+1416000 memory round 27 ok 27 bad 0 temp 77
+1416000 memory round 28 ok 28 bad 0 temp 78
+1416000 memory round 29 ok 29 bad 0 temp 76
+1416000 memory round 30 ok 30 bad 0 temp 76
+1416000 memory round 31 ok 31 bad 0 temp 78
+1416000 memory round 32 ok 32 bad 0 temp 77
+1416000 memory round 33 ok 33 bad 0 temp 77
+1416000 memory round 34 ok 34 bad 0 temp 78
+1416000 memory round 35 ok 35 bad 0 temp 76
+1416000 memory round 36 ok 36 bad 0 temp 76
+1416000 memory round 37 ok 37 bad 0 temp 77
+1416000 memory round 38 ok 38 bad 0 temp 77
+1416000 memory round 39 ok 39 bad 0 temp 75
+1416000 memory round 40 ok 40 bad 0 temp 77
+MEMORY 1416000: ok 40 bad 0 after 40 rounds
+1512000 round 1 ok 4 bad 0 crash 0 temp 79 Iterations/Sec : 3141.361257
+1512000 round 2 ok 8 bad 0 crash 0 temp 80 Iterations/Sec : 3201.280512
+1512000 round 3 ok 12 bad 0 crash 0 temp 78 Iterations/Sec : 3261.844573
+1512000 round 4 ok 16 bad 0 crash 0 temp 79 Iterations/Sec : 3210.788249
+1512000 round 5 ok 20 bad 0 crash 0 temp 79 Iterations/Sec : 3163.305654
+1512000 round 6 ok 24 bad 0 crash 0 temp 78 Iterations/Sec : 3317.850033
+1512000 round 7 ok 28 bad 0 crash 0 temp 76 Iterations/Sec : 3155.569580
+1512000 round 8 ok 32 bad 0 crash 0 temp 78 Iterations/Sec : 3297.609233
+1512000 round 9 ok 36 bad 0 crash 0 temp 80 Iterations/Sec : 3325.020781
+1512000 round 10 ok 40 bad 0 crash 0 temp 78 Iterations/Sec : 3275.466754
+1512000 round 11 ok 44 bad 0 crash 0 temp 79 Iterations/Sec : 3252.296935
+1512000 round 12 ok 48 bad 0 crash 0 temp 80 Iterations/Sec : 3249.918752
+1512000 round 13 ok 52 bad 0 crash 0 temp 80 Iterations/Sec : 3353.735223
+1512000 round 14 ok 56 bad 0 crash 0 temp 78 Iterations/Sec : 3230.235000
+1512000 round 15 ok 60 bad 0 crash 0 temp 78 Iterations/Sec : 3295.707341
+1512000 round 16 ok 64 bad 0 crash 0 temp 78 Iterations/Sec : 3296.522169
+1512000 round 17 ok 68 bad 0 crash 0 temp 78 Iterations/Sec : 3179.397504
+1512000 round 18 ok 72 bad 0 crash 0 temp 78 Iterations/Sec : 3350.364352
+1512000 round 19 ok 76 bad 0 crash 0 temp 77 Iterations/Sec : 3301.419610

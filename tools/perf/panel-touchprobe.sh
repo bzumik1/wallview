@@ -3,11 +3,19 @@ set -eu
 PANEL=${1:-}
 SECONDS_RUN=${2:-}
 NAME=${3:-}
+COUNTER=${4:-}
+MODE=${5:-level}
+COMMAND=${6:-}
 [ -n "$PANEL" ] && [ -n "$NAME" ] && case "$SECONDS_RUN" in '' | *[!0-9]*) false ;; *) [ "$SECONDS_RUN" -ge 1 ] && [ "$SECONDS_RUN" -le 120 ] ;; esac || {
-	echo "usage: $0 root@<panel> <seconds 1-120> <name>" >&2
+	echo "usage: $0 root@<panel> <seconds 1-120> <name> [counter<ms> [level|poll<ms> [mode06|mode09]]]" >&2
 	exit 2
 }
 case "$NAME" in *[!A-Za-z0-9._-]*) echo "name: letters, digits, . _ - only" >&2; exit 2 ;; esac
+case "$COUNTER" in "" | counter[5-9][0-9] | counter[1-9][0-9][0-9] | counter[1-9][0-9][0-9][0-9]) ;; *) echo "counter: counter<50-9999 ms>" >&2; exit 2 ;; esac
+case "$MODE" in level | poll[1-9] | poll[1-9][0-9] | poll[1-9][0-9][0-9]) ;; *) echo "mode: level or poll<1-999 ms>" >&2; exit 2 ;; esac
+EXTRA=
+case "$COMMAND" in "" | mode06 | mode09) ;; *) echo "command: mode06 or mode09" >&2; exit 2 ;; esac
+[ -z "$COUNTER" ] || EXTRA="$MODE ack $COUNTER $COMMAND"
 SSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
@@ -43,7 +51,7 @@ $SSH "$PANEL" "D=/sys/bus/i2c/drivers/Hynitron-TS
 	trap 'echo 1-005a > \$D/bind 2>/dev/null; rm -f /tmp/touchprobe.q' EXIT
 	trap 'exit 1' HUP INT TERM
 	echo 1-005a > \$D/unbind
-	/tmp/touchprobe.q /dev/i2c-1 /dev/gpiochip0 13 $SECONDS_RUN" > "$LOCAL" && rc=0 || rc=$?
+	/tmp/touchprobe.q /dev/i2c-1 /dev/gpiochip0 13 $SECONDS_RUN $EXTRA" > "$LOCAL" && rc=0 || rc=$?
 sleep 3
 $SSH "$PANEL" 'ls /sys/bus/i2c/drivers/Hynitron-TS/1-005a > /dev/null 2>&1 && echo "driver bound" || { echo "DRIVER NOT BOUND" >&2; exit 1; }
 	pidof wallview-touch > /dev/null && echo "wallview-touch running" || echo "wallview-touch not running"'
