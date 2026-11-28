@@ -1,0 +1,152 @@
+From: WallView
+Subject: [PATCH] SVG: a stroke dash change repaints circles and ellipses without layout
+
+A change of stroke-dasharray or stroke-dashoffset required a layout,
+because shapes cache stroke bounding boxes that may depend on the dash
+pattern. A CSS animation of these properties, such as Home Assistant's
+loading spinner (a circle whose dash pattern animates forever), therefore
+ran a full frame layout pass every animation frame: performLayout,
+post-layout tasks and a compositing update over the whole page.
+
+The stroke bounding boxes of the legacy circle and ellipse renderer
+without a non-scaling stroke are its fill box inflated by half the stroke
+width; the cached boxes do not depend on dashes. For such a renderer a
+dash change is now a repaint, unless an ancestor up to the SVG root has
+an SVG filter, whose container relies on the child's layout to repaint
+the filtered area. Every other renderer (paths, rects, text, non-scaling
+strokes, the layer-based SVG engine) still lays out: RenderElement::setStyle
+raises a dash change to a layout unless the renderer is such an ellipse.
+RenderStyle::diff reports a dash change as a repaint, so no caller sees
+two styles that differ in dashes as equal. Only .cpp files and the
+ellipse header (four files include it) change, so a rebuild with the
+patch recompiles five WebCore sources.
+
+Upstream-Status: Pending
+---
+diff --git a/Source/WebCore/rendering/RenderElement.cpp b/Source/WebCore/rendering/RenderElement.cpp
+index bff3501..3703792 100644
+--- a/Source/WebCore/rendering/RenderElement.cpp
++++ b/Source/WebCore/rendering/RenderElement.cpp
+@@ -48,6 +48,7 @@
+ #include "InlineWalker.h"
+ #include "LayoutElementBox.h"
+ #include "LayoutIntegrationLineLayout.h"
++#include "LegacyRenderSVGEllipse.h"
+ #include "LengthFunctions.h"
+ #include "LocalFrame.h"
+ #include "Logging.h"
+@@ -93,6 +94,7 @@
+ #include "SVGElementTypeHelpers.h"
+ #include "SVGImage.h"
+ #include "SVGLengthContext.h"
++#include "SVGRenderStyle.h"
+ #include "SVGRenderSupport.h"
+ #include "SVGSVGElement.h"
+ #include "Settings.h"
+@@ -587,6 +589,17 @@ static void logStyleDifference(const RenderElement& renderer, const RenderStyle&
+ }
+ #endif
+ 
++static bool strokeDashChangeRequiresLayout(const RenderElement& renderer, const RenderStyle& oldStyle, const RenderStyle& newStyle)
++{
++    if (&oldStyle.svgStyle() == &newStyle.svgStyle())
++        return false;
++    if (oldStyle.strokeDashArray() == newStyle.strokeDashArray() && oldStyle.strokeDashOffset() == newStyle.strokeDashOffset())
++        return false;
++    if (renderer.type() != RenderObject::Type::LegacySVGEllipse)
++        return true;
++    return static_cast<const LegacyRenderSVGEllipse&>(renderer).strokeDashChangeRequiresLayout();
++}
++
+ void RenderElement::setStyle(RenderStyle&& style, StyleDifference minimalStyleDifference)
+ {
+     // FIXME: Should change RenderView so it can use initializeStyle too.
+@@ -603,6 +616,9 @@ void RenderElement::setStyle(RenderStyle&& style, StyleDifference minimalStyleDi
+ #endif
+     }
+ 
++    if (diff < StyleDifference::Layout && m_hasInitializedStyle && strokeDashChangeRequiresLayout(*this, m_style, style))
++        diff = StyleDifference::Layout;
++
+     diff = std::max(diff, minimalStyleDifference);
+ 
+     diff = adjustStyleDifference(diff, contextSensitiveProperties);
+diff --git a/Source/WebCore/rendering/style/SVGRenderStyle.cpp b/Source/WebCore/rendering/style/SVGRenderStyle.cpp
+index 3c538e5..c4ac423 100644
+--- a/Source/WebCore/rendering/style/SVGRenderStyle.cpp
++++ b/Source/WebCore/rendering/style/SVGRenderStyle.cpp
+@@ -171,8 +171,6 @@ bool SVGRenderStyle::changeRequiresLayout(const SVGRenderStyle& other) const
+     // Some stroke properties, requires relayouts, as the cached stroke boundaries need to be recalculated.
+     if (m_strokeData->paint.type != other.m_strokeData->paint.type
+         || m_strokeData->paint.url != other.m_strokeData->paint.url
+-        || m_strokeData->dashArray != other.m_strokeData->dashArray
+-        || m_strokeData->dashOffset != other.m_strokeData->dashOffset
+         || m_strokeData->visitedLinkPaint.type != other.m_strokeData->visitedLinkPaint.type
+         || m_strokeData->visitedLinkPaint.url != other.m_strokeData->visitedLinkPaint.url)
+         return true;
+@@ -195,6 +193,10 @@ bool SVGRenderStyle::changeRequiresRepaint(const SVGRenderStyle& other, bool cur
+             || containsCurrentColor(m_fillData->paint.color); // FIXME: Should this be checking m_fillData->visitedLinkPaint.color as well?
+     }
+ 
++    if (m_strokeData->dashArray != other.m_strokeData->dashArray
++        || m_strokeData->dashOffset != other.m_strokeData->dashOffset)
++        return true;
++
+     if (m_strokeData->opacity != other.m_strokeData->opacity
+         || colorChangeRequiresRepaint(m_strokeData->paint.color, other.m_strokeData->paint.color, currentColorDiffers)
+         || colorChangeRequiresRepaint(m_strokeData->visitedLinkPaint.color, other.m_strokeData->visitedLinkPaint.color, currentColorDiffers))
+diff --git a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp
+index 03d46c4..f42a1cc 100644
+--- a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp
++++ b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.cpp
+@@ -27,11 +27,14 @@
+ #include "config.h"
+ #include "LegacyRenderSVGEllipse.h"
+ 
++#include "LegacyRenderSVGRoot.h"
+ #include "LegacyRenderSVGShapeInlines.h"
+ #include "SVGCircleElement.h"
+ #include "SVGElementTypeHelpers.h"
+ #include "SVGEllipseElement.h"
+ #include "SVGRenderStyle.h"
++#include "SVGResources.h"
++#include "SVGResourcesCache.h"
+ #include <wtf/TZoneMallocInlines.h>
+ 
+ namespace WebCore {
+@@ -80,6 +83,22 @@ void LegacyRenderSVGEllipse::updateShapeFromElement()
+         m_strokeBoundingBox->inflate(strokeWidth() / 2);
+ }
+ 
++bool LegacyRenderSVGEllipse::strokeDashChangeRequiresLayout() const
++{
++    if (m_shapeType != ShapeType::Circle && m_shapeType != ShapeType::Ellipse)
++        return true;
++    if (hasNonScalingStroke())
++        return true;
++    for (CheckedPtr ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
++        auto* resources = SVGResourcesCache::cachedResourcesForRenderer(*ancestor);
++        if (resources && resources->filter())
++            return true;
++        if (is<LegacyRenderSVGRoot>(*ancestor))
++            break;
++    }
++    return false;
++}
++
+ void LegacyRenderSVGEllipse::calculateRadiiAndCenter()
+ {
+     Ref graphicsElement = this->graphicsElement();
+diff --git a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h
+index 67c5910..3374fe4 100644
+--- a/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h
++++ b/Source/WebCore/rendering/svg/legacy/LegacyRenderSVGEllipse.h
+@@ -37,6 +37,8 @@ public:
+     LegacyRenderSVGEllipse(SVGGraphicsElement&, RenderStyle&&);
+     virtual ~LegacyRenderSVGEllipse();
+ 
++    bool strokeDashChangeRequiresLayout() const;
++
+ private:
+     ASCIILiteral renderName() const override { return "RenderSVGEllipse"_s; }
+ 
