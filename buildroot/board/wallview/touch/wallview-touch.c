@@ -585,10 +585,17 @@ handle_frame(int64_t time)
             c->blend = 1;
             add_sample(c, time);
         } else if (c->started) {
-            if (c->active) {
+            int held = c->active;
+
+            for (int other = 0; other < MAX_SLOTS; other++)
+                if (other != slot && contacts[other].releasing) {
+                    release(other);
+                    held = 1;
+                }
+            if (c->active)
                 release(slot);
+            if (held)
                 flush();
-            }
             c->started = 0;
             c->active = 1;
             c->samples = 0;
@@ -608,11 +615,6 @@ handle_frame(int64_t time)
             c->fresh = 0;
             c->order = ++started_count;
             c->multi = 0;
-            for (int other = 0; other < MAX_SLOTS; other++)
-                if (other != slot && contacts[other].active && !contacts[other].releasing) {
-                    contacts[other].multi = 1;
-                    c->multi = 1;
-                }
             emit_position(slot, c->x, c->y);
             c->dirty = 0;
         } else if (c->ended) {
@@ -634,6 +636,14 @@ handle_frame(int64_t time)
             add_sample(c, time);
         }
     }
+    int down = 0;
+
+    for (int slot = 0; slot < MAX_SLOTS; slot++)
+        down += contacts[slot].active && !contacts[slot].releasing;
+    if (down > 1)
+        for (int slot = 0; slot < MAX_SLOTS; slot++)
+            if (contacts[slot].active && !contacts[slot].releasing)
+                contacts[slot].multi = 1;
     flush();
     if (first_active() < 0)
         arm_timer(0);
@@ -1096,12 +1106,6 @@ main(int argc, char **argv)
         ioctl(input, EVIOCGRAB, 0);
         usleep(50000);
     }
-    {
-        struct input_event stale[64];
-
-        while (read(input, stale, sizeof(stale)) > 0)
-            ;
-    }
     int slot = 0;
 
     output = create_output(input);
@@ -1146,6 +1150,12 @@ main(int argc, char **argv)
 
     struct pollfd fds[4] = { { input, POLLIN, 0 }, { timer, POLLIN, 0 }, { -1, POLLIN, 0 }, { phase_timer, POLLIN, 0 } };
 
+    {
+        struct input_event stale[64];
+
+        while (read(input, stale, sizeof(stale)) > 0)
+            ;
+    }
     resync(now_ns(), &slot);
     open_drm();
     while (!stopping) {

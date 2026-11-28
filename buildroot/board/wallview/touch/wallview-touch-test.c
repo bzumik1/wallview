@@ -193,7 +193,19 @@ int main(void) {
 	    for (int i = 0; i < 6; i++) { t += 17 * MS; run_until(t); ax0 -= 5; bx += 5; move(t, 0, (int)ax0, (int)ay0); move(t, 1, (int)bx, (int)by); drain(t); } }
 	  t += 60 * MS; run_until(t); up(t, 0); up(t, 1); drain(t);
 	  printf("pinch lift: ups %d, held %d %d\n", ups, contacts[0].releasing, contacts[1].releasing); assert(ups == 2);
-	  run_until(t + 200 * MS); t += 200 * MS; }
+	  run_until(t + 200 * MS); t += 200 * MS; 
+	{ reset(); x = 300; y = 240; down(t, 0, 37, 300, 240); drain(t);
+	  t = drag(t, 0, &x, &y, -500, 0, 6, 17 * MS); run_until(t + 17 * MS); up(t + 17 * MS, 0); drain(t + 17 * MS);
+	  int held = contacts[0].releasing; t += 32 * MS; run_until(t); down(t, 1, 38, 400, 240); drain(t);
+	  printf("second finger in another slot during a held lift: held %d, then slot 0 down %d, ups %d\n", held, down_now[0], ups); assert(held && !down_now[0] && ups == 1);
+	  t += 20 * MS; run_until(t); down(t, 0, 39, (int)x - 20, 240); drain(t);
+	  printf("finger landing next to it: multi %d %d\n", contacts[0].multi, contacts[1].multi); assert(contacts[0].multi && contacts[1].multi);
+	  up(t + 20 * MS, 0); up(t + 20 * MS, 1); run_until(t + 300 * MS); t += 300 * MS; }
+	{ reset(); down(t, 1, 40, 300, 240); t += 50 * MS; run_until(t);
+	  s(t, 1); ev(t, EV_ABS, ABS_MT_TRACKING_ID, -1); s(t, 0); ev(t, EV_ABS, ABS_MT_TRACKING_ID, 41); ev(t, EV_ABS, ABS_MT_POSITION_X, 100); ev(t, EV_ABS, ABS_MT_POSITION_Y, 100); ev(t, EV_SYN, SYN_REPORT, 0); drain(t);
+	  printf("lift and land in other slots in one frame: multi %d\n", contacts[0].multi); assert(!contacts[0].multi);
+	  up(t + 20 * MS, 0); run_until(t + 300 * MS); t += 300 * MS; }
+	}
 
 	setenv("WALLVIEW_TOUCH_X", "1e13", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "nan", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
