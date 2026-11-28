@@ -73,6 +73,20 @@
 		      <0x0 0x0a200000 0x0 0x75e00000>;
 	};
 
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		ramoops@110000 {
+			compatible = "ramoops";
+			reg = <0x0 0x00110000 0x0 0x000f0000>;
+			record-size = <0x20000>;
+			console-size = <0x80000>;
+			pmsg-size = <0x50000>;
+		};
+	};
+
 	sdio_pwrseq: sdio-pwrseq {
 		compatible = "mmc-pwrseq-simple";
 		clocks = <&rk809 1>;
