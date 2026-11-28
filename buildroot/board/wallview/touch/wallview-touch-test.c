@@ -82,8 +82,8 @@ static void reset(void) { memset(contacts, 0, sizeof contacts); downs = ups = 0;
 static void defaults(void) {
 	setenv("WALLVIEW_TOUCH_LIFT_MS", "", 1);
 	o = (struct options){ .period = NSEC_PER_SEC / 120, .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 16), .max_prediction = 30 * MS, .max_sample_gap = 150 * MS,
-		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 12, .start_travel = 8, .hold_speed = 60, .start_speed = 150,
-		.hold_recent = 100 * MS, .coast = 250 * MS, .coast_after = 85 * MS, .coast_max = 80, .coast_speed = 150, .blend = 0.7, .ease_min = 100 * MS, .gap_blend = 280 * MS, .gap_blend_min = 60 * MS, .predict_travel = 6, .debug = getenv("DBG") != NULL };
+		.lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80), .rejoin_min = 30, .rejoin_slack = 0.75, .hold_travel = 13, .start_travel = 13, .hold_speed = 60, .start_speed = 150,
+		.hold_recent = 100 * MS, .coast = 250 * MS, .coast_after = 85 * MS, .coast_max = 80, .coast_speed = 150, .blend = 0.7, .ease_min = 100 * MS, .gap_blend = 280 * MS, .gap_blend_min = 60 * MS, .predict_travel = 13, .debug = getenv("DBG") != NULL };
 }
 static int64_t drag(int64_t t, int sl, double *x, double *y, double vx, double vy, int n, int64_t dt) {
 	for (int i = 0; i < n; i++) { t += dt; run_until(t); *x += vx * dt / NSEC_PER_SEC; *y += vy * dt / NSEC_PER_SEC; move(t, sl, (int)*x, (int)*y); drain(t); }
@@ -204,6 +204,16 @@ int main(void) {
 	printf("out of range slot: ups %d\n", ups); assert(ups == 0 && contacts[0].active);
 	slot = 0; up(t + 210 * MS, 0); run_until(t + 400 * MS); assert(ups == 1);
 
+	{ int worst = 0, cases = 0;
+	  for (int slide = 2; slide <= 12; slide++) for (int ph = 0; ph < 8; ph++) for (int steps = 2; steps <= 4; steps++) {
+	      reset(); t += 500 * MS + ph * MS; down(t, 0, 40, 200, 200); drain(t);
+	      for (int i = 1; i <= steps; i++) { int64_t s2 = t + i * 25 * MS; while (clock_t0 + o.period <= s2) { run_until(clock_t0 + o.period); if (down_now[0]) { int d = (int)ceil(hypot(outx[0] - 200, outy[0] - 200)); if (d > worst) worst = d; } }
+	          move(s2, 0, 200 + slide * i / steps, 200); drain(s2); }
+	      int64_t u = t + steps * 25 * MS + 25 * MS;
+	      while (clock_t0 + o.period <= u) { run_until(clock_t0 + o.period); if (down_now[0]) { int d = (int)ceil(hypot(outx[0] - 200, outy[0] - 200)); if (d > worst) worst = d; } }
+	      up(u, 0); drain(u); run_until(u + 400 * MS); t = u + 400 * MS; cases++; }
+	  printf("sloppy taps sliding 2-12 px (%d cases): output at most %d px from the down point\n", cases, worst); assert(worst <= 12); }
+
 	{ struct input_event e[256]; ssize_t n; int toggles = 0, frames_with_both = 0, ax = -1;
 	  reset(); t += 500 * MS; down(t, 1, 31, 300, 300); t += 20 * MS; run_until(t); down(t, 0, 30, 100, 100); t += 20 * MS; run_until(t);
 	  while (read(pipefd[0], e, sizeof e) > 0);
@@ -216,11 +226,13 @@ int main(void) {
 	  printf("second finger lift during a two-finger touch: releasing %d\n", contacts[0].releasing); assert(!contacts[0].releasing);
 	  t += 50 * MS; up(t, 1); run_until(t + 300 * MS); t += 300 * MS; down(t, 0, 34, 50, 50); t += 100 * MS; run_until(t); while (read(pipefd[0], e, sizeof e) > 0);
 	  s(t, 0); ev(t, EV_ABS, ABS_MT_TRACKING_ID, -1); s(t, 1); ev(t, EV_ABS, ABS_MT_TRACKING_ID, 32); ev(t, EV_ABS, ABS_MT_POSITION_X, 200); ev(t, EV_ABS, ABS_MT_POSITION_Y, 200); ev(t, EV_SYN, SYN_REPORT, 0);
-	  int btn_down = 0, btn_up = 0;
+	  int btn_down = 0, btn_up = 0, seq = 0, lift_at = 0, land_at = 0;
 	  while ((n = read(pipefd[0], e, sizeof e)) > 0) for (size_t i = 0; i < (size_t)n / sizeof e[0]; i++) {
+	      if (e[i].type == EV_ABS && e[i].code == ABS_MT_TRACKING_ID) { if (e[i].value < 0) lift_at = ++seq; else if (e[i].value == 32) land_at = ++seq; }
 	      if (e[i].type == EV_KEY && e[i].code == BTN_TOUCH) { toggles++; if (e[i].value) btn_down = 1; else btn_up = 1; }
 	      if (e[i].type == EV_SYN) { if (btn_down && btn_up) frames_with_both++; btn_down = btn_up = 0; } }
-	  printf("one contact ends and another starts in one frame: BTN_TOUCH events %d, frames with both %d\n", toggles, frames_with_both); assert(toggles == 0 && frames_with_both == 0);
+	  printf("one contact ends and another starts in one frame: lift %d before landing %d, BTN_TOUCH events %d, frames with both %d\n", lift_at, land_at, toggles, frames_with_both);
+	  assert(lift_at && land_at && lift_at < land_at && toggles == 2 && frames_with_both == 0);
 	  run_until(t + 300 * MS); up(t + 300 * MS, 1); run_until(t + 600 * MS);
 	  t += 700 * MS; down(t, 0, 33, 100, 100); run_until(t + 300 * MS);
 	  assert(timer_armed == 0);

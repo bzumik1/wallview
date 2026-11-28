@@ -645,8 +645,29 @@ static void
 handle_frame(int64_t time)
 {
     int wake = 0;
-    int ending[MAX_SLOTS] = { 0 };
+    int landing = 0;
 
+    for (int slot = 0; slot < MAX_SLOTS; slot++)
+        landing |= contacts[slot].started && !contacts[slot].releasing;
+    for (int slot = 0; slot < MAX_SLOTS; slot++) {
+        struct contact *c = &contacts[slot];
+
+        if (!c->ended || c->started)
+            continue;
+        wake = 1;
+        c->ended = 0;
+        if (!c->active || c->releasing) {
+            c->dirty = 0;
+        } else if (opts->lift_hold > 0 && !landing && holds(slot, time)) {
+            c->releasing = 1;
+            c->coasting = 0;
+            c->lift_at = time;
+            c->release_at = time + opts->lift_hold;
+            c->dirty = 0;
+        } else {
+            release(slot);
+        }
+    }
     for (int slot = 0; slot < MAX_SLOTS; slot++) {
         struct contact *c = &contacts[slot];
 
@@ -698,19 +719,6 @@ handle_frame(int64_t time)
             c->multi = 0;
             emit_position(slot, c->x, c->y);
             c->dirty = 0;
-        } else if (c->ended) {
-            c->ended = 0;
-            if (!c->active || c->releasing) {
-                c->dirty = 0;
-            } else if (opts->lift_hold > 0 && holds(slot, time)) {
-                c->releasing = 1;
-                c->coasting = 0;
-                c->lift_at = time;
-                c->release_at = time + opts->lift_hold;
-                c->dirty = 0;
-            } else {
-                ending[slot] = 1;
-            }
         } else if (c->dirty) {
             int64_t gap = c->samples ? time - c->history[c->samples - 1].time : 0;
             int last_x = c->samples ? c->history[c->samples - 1].x : c->x;
@@ -735,9 +743,6 @@ handle_frame(int64_t time)
             add_sample(c, time);
         }
     }
-    for (int slot = 0; slot < MAX_SLOTS; slot++)
-        if (ending[slot] && contacts[slot].active)
-            release(slot);
     int down = 0;
 
     for (int slot = 0; slot < MAX_SLOTS; slot++)
@@ -1158,8 +1163,8 @@ load_options(struct options *options)
         .lift_hold = env_ms("WALLVIEW_TOUCH_LIFT_MS", 80),
         .rejoin_min = (int)env_number("WALLVIEW_TOUCH_REJOIN_PX", 30),
         .rejoin_slack = env_number("WALLVIEW_TOUCH_REJOIN_SLACK", 0.75),
-        .hold_travel = (int)env_number("WALLVIEW_TOUCH_HOLD_TRAVEL_PX", 12),
-        .start_travel = (int)env_number("WALLVIEW_TOUCH_START_TRAVEL_PX", 8),
+        .hold_travel = (int)env_number("WALLVIEW_TOUCH_HOLD_TRAVEL_PX", 13),
+        .start_travel = (int)env_number("WALLVIEW_TOUCH_START_TRAVEL_PX", 13),
         .hold_speed = env_number("WALLVIEW_TOUCH_HOLD_PX_PER_S", 60),
         .hold_max_speed = env_number("WALLVIEW_TOUCH_HOLD_MAX_PX_PER_S", 0),
         .start_speed = env_number("WALLVIEW_TOUCH_START_PX_PER_S", 150),
@@ -1172,7 +1177,7 @@ load_options(struct options *options)
         .ease_min = env_ms("WALLVIEW_TOUCH_PREDICT_EASE_MS", 100),
         .gap_blend = env_ms("WALLVIEW_TOUCH_GAP_BLEND_MS", 280),
         .gap_blend_min = env_ms("WALLVIEW_TOUCH_GAP_BLEND_MIN_MS", 60),
-        .predict_travel = (int)env_number("WALLVIEW_TOUCH_PREDICT_TRAVEL_PX", 6),
+        .predict_travel = (int)env_number("WALLVIEW_TOUCH_PREDICT_TRAVEL_PX", 13),
         .debug = (int)env_number("WALLVIEW_TOUCH_DEBUG", 0),
         .vblank = (int)env_number("WALLVIEW_TOUCH_VBLANK", 0),
         .drm_path = getenv("WALLVIEW_TOUCH_DRM") && *getenv("WALLVIEW_TOUCH_DRM") ? getenv("WALLVIEW_TOUCH_DRM") : "/dev/dri/card0",
