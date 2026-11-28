@@ -7,6 +7,7 @@ struct raw {
     int touch;
     int x;
     int y;
+    int kept;
 };
 
 static struct raw *raws;
@@ -105,7 +106,7 @@ drain(int64_t t, int tick)
                     out_down = 0;
                     release_delays[nrelease++] = ms(t - last_raw_touch);
                     if (stroke_reach < 10 && raw_up_at)
-                        tap_delays[ntap++] = ms(t - raw_up_at);
+                        tap_delays[ntap++] = ms(t - last_raw_touch);
                 } else {
                     downs++;
                     out_down = 1;
@@ -183,7 +184,7 @@ feed(const struct raw *r)
         event(r->time, EV_ABS, ABS_MT_TRACKING_ID, -1);
         event(r->time, EV_SYN, SYN_REPORT, 0);
     }
-    if (r->touch) {
+    if (r->touch && !r->kept) {
         int d = (int)sqrt((double)(r->x - stroke_x0) * (r->x - stroke_x0) + (double)(r->y - stroke_y0) * (r->y - stroke_y0));
 
         if (d > stroke_reach)
@@ -240,20 +241,21 @@ main(int argc, char **argv)
         if (nraw == cap)
             raws = realloc(raws, (cap *= 2) * sizeof(raws[0]));
         if (kept && (int64_t)start > kept_at + keep_timeout) {
-            raws[nraw++] = (struct raw){ kept_at + keep_timeout, 0, 0, 0 };
+            raws[nraw++] = (struct raw){ kept_at + keep_timeout, 0, 0, 0, 0 };
             kept = 0;
             if (nraw == cap)
                 raws = realloc(raws, (cap *= 2) * sizeof(raws[0]));
         }
         if (count > 0 && id != 3 && hold_status && nraw && raws[nraw - 1].touch && kept < 2) {
             raws[nraw] = raws[nraw - 1];
+            raws[nraw].kept = 1;
             raws[nraw++].time = (int64_t)start;
             kept++;
             kept_at = (int64_t)start;
             continue;
         }
         kept = 0;
-        raws[nraw++] = (struct raw){ (int64_t)start, count > 0 && id == 3, (int)y, (int)x };
+        raws[nraw++] = (struct raw){ (int64_t)start, count > 0 && id == 3, (int)y, (int)x, 0 };
     }
     fclose(f);
     if (!nraw) {
@@ -311,6 +313,6 @@ main(int argc, char **argv)
     printf("path error vs raw change points: p50 %.1f p95 %.1f max %.1f px\n", pct(errors, nerrors, .5), pct(errors, nerrors, .95), pct(errors, nerrors, 1));
     printf("steps: max %.1f px, jerks (acceleration > 6 px/tick^2) %d, stalls (finger moved, output did not) %d\n", max_step, jerks, stalls);
     printf("release after last touch sample: p50 %.0f p95 %.0f max %.0f ms\n", pct(release_delays, nrelease, .5), pct(release_delays, nrelease, .95), pct(release_delays, nrelease, 1));
-    printf("tap release delay: n %d p50 %.0f max %.0f ms\n", ntap, pct(tap_delays, ntap, .5), pct(tap_delays, ntap, 1));
+    printf("tap release after last pressed read: n %d p50 %.0f max %.0f ms\n", ntap, pct(tap_delays, ntap, .5), pct(tap_delays, ntap, 1));
     return 0;
 }

@@ -63,6 +63,8 @@ struct contact {
     double coast_x;
     double coast_y;
     int64_t coast_at;
+    uint64_t order;
+    int multi;
 };
 
 struct options {
@@ -108,6 +110,7 @@ static int vblank_pending;
 static int phase_timer = -1;
 static int64_t frame = NSEC_PER_SEC / 60;
 static int64_t last_vblank;
+static int64_t vblank_retry_at;
 static const struct options *opts;
 static struct input_event pending[256];
 static int pending_count;
@@ -129,9 +132,19 @@ queue(int type, int code, int value)
     pending[pending_count++] = (struct input_event){ .type = type, .code = code, .value = value };
 }
 
+static int first_active(void);
+static int touch_sent;
+static uint64_t started_count;
+
 static void
 flush(void)
 {
+    int down = first_active() >= 0;
+
+    if (down != touch_sent) {
+        queue(EV_KEY, BTN_TOUCH, down);
+        touch_sent = down;
+    }
     if (!pending_count)
         return;
     queue(EV_SYN, SYN_REPORT, 0);
@@ -149,6 +162,17 @@ first_active(void)
     return -1;
 }
 
+static int
+pointer_slot(void)
+{
+    int found = -1;
+
+    for (int slot = 0; slot < MAX_SLOTS; slot++)
+        if (contacts[slot].active && (found < 0 || contacts[slot].order < contacts[found].order))
+            found = slot;
+    return found;
+}
+
 static void
 emit_position(int slot, int x, int y)
 {
@@ -159,7 +183,7 @@ emit_position(int slot, int x, int y)
     queue(EV_ABS, ABS_MT_SLOT, slot);
     queue(EV_ABS, ABS_MT_POSITION_X, x);
     queue(EV_ABS, ABS_MT_POSITION_Y, y);
-    if (first_active() == slot) {
+    if (pointer_slot() == slot) {
         queue(EV_ABS, ABS_X, x);
         queue(EV_ABS, ABS_Y, y);
     }
@@ -241,8 +265,7 @@ open_drm(void)
     int64_t started = now_ns();
 
     drm_retry_at = started + drm_backoff;
-    if (drm_backoff < 60 * NSEC_PER_SEC)
-        drm_backoff *= 2;
+    drm_backoff = drm_backoff * 2 < 60 * NSEC_PER_SEC ? drm_backoff * 2 : 60 * NSEC_PER_SEC;
     if (stat(opts->drm_path, &node) < 0 || !S_ISCHR(node.st_mode)) {
         if (!drm_warned)
             fprintf(stderr, "wallview-touch: %s is not a device node, using the timer\n", opts->drm_path);
@@ -270,6 +293,9 @@ open_drm(void)
         return;
     }
     if (ioctl(fd, DRM_IOCTL_DROP_MASTER, 0) == 0) {
+        if (!drm_warned)
+            fprintf(stderr, "wallview-touch: %s had no master, using the timer\n", opts->drm_path);
+        drm_warned = 1;
         close(fd);
         return;
     }
@@ -302,13 +328,16 @@ request_vblank(void)
 {
     if (vblank_pending)
         return 0;
-    if (drm < 0)
+    if (drm < 0 || (vblank_retry_at && now_ns() < vblank_retry_at))
         return -1;
 
     union drm_wait_vblank wait = { .request = { .type = _DRM_VBLANK_RELATIVE | _DRM_VBLANK_EVENT, .sequence = 1 } };
 
-    if (ioctl(drm, DRM_IOCTL_WAIT_VBLANK, &wait) < 0)
+    if (ioctl(drm, DRM_IOCTL_WAIT_VBLANK, &wait) < 0) {
+        vblank_retry_at = now_ns() + NSEC_PER_SEC;
         return -1;
+    }
+    vblank_retry_at = 0;
     vblank_pending = 1;
     return 0;
 }
@@ -356,6 +385,8 @@ read_vblank(void)
     }
     if (size < 0 && errno != EAGAIN && errno != EINTR) {
         close_drm();
+        if (timer_armed == 2)
+            arm_timer(1);
         return 0;
     }
     if (latest) {
@@ -449,7 +480,7 @@ static void
 release(int slot)
 {
     struct contact *c = &contacts[slot];
-    int first = first_active() == slot;
+    int first = pointer_slot() == slot;
     struct sample *last = c->samples ? &c->history[c->samples - 1] : NULL;
 
     c->releasing = 0;
@@ -463,11 +494,9 @@ release(int slot)
     queue(EV_ABS, ABS_MT_TRACKING_ID, -1);
     c->active = 0;
     c->dirty = 0;
-    int next = first_active();
+    int next = pointer_slot();
 
-    if (next < 0) {
-        queue(EV_KEY, BTN_TOUCH, 0);
-    } else if (first) {
+    if (next >= 0 && first) {
         queue(EV_ABS, ABS_X, contacts[next].emitted_x);
         queue(EV_ABS, ABS_Y, contacts[next].emitted_y);
     }
@@ -502,6 +531,8 @@ holds(int slot, int64_t time)
 
     if (c->samples < 2)
         return 0;
+    if (c->multi)
+        return 0;
     const struct sample *last = &c->history[c->samples - 1];
     double speed = velocity(c, &c->vx, &c->vy);
     int age_ok = time - last->time <= opts->hold_recent;
@@ -533,12 +564,18 @@ expire_releases(int64_t now)
         }
 }
 
+static void resample(const struct options *options, int64_t now);
+
 static void
 handle_frame(int64_t time)
 {
+    int wake = 0;
+
     for (int slot = 0; slot < MAX_SLOTS; slot++) {
         struct contact *c = &contacts[slot];
 
+        if (c->started || c->ended || c->dirty)
+            wake = 1;
         if (c->started && c->releasing && rejoins(slot, time)) {
             c->started = 0;
             c->releasing = 0;
@@ -569,8 +606,13 @@ handle_frame(int64_t time)
             c->emitted_y = -1;
             c->predicted = 0;
             c->fresh = 0;
-            if (first_active() == slot)
-                queue(EV_KEY, BTN_TOUCH, 1);
+            c->order = ++started_count;
+            c->multi = 0;
+            for (int other = 0; other < MAX_SLOTS; other++)
+                if (other != slot && contacts[other].active && !contacts[other].releasing) {
+                    contacts[other].multi = 1;
+                    c->multi = 1;
+                }
             emit_position(slot, c->x, c->y);
             c->dirty = 0;
         } else if (c->ended) {
@@ -593,7 +635,12 @@ handle_frame(int64_t time)
         }
     }
     flush();
-    arm_timer(first_active() >= 0);
+    if (first_active() < 0)
+        arm_timer(0);
+    else if (wake && !timer_armed)
+        resample(opts, time);
+    else if (wake)
+        arm_timer(1);
 }
 
 static int
@@ -651,7 +698,7 @@ predict(const struct contact *c, const struct sample *last, int64_t target, int 
     int64_t fade = 4 * (timer_armed == 2 ? frame : period);
 
     if (ease_from > opts->max_sample_gap - fade)
-        ease_from = opts->max_sample_gap - fade;
+        ease_from = opts->max_sample_gap - fade > 0 ? opts->max_sample_gap - fade : 0;
     double vx, vy;
 
     if (interval > opts->max_sample_gap || age <= 0 || age > opts->max_sample_gap || c->reach < opts->predict_travel)
@@ -707,8 +754,11 @@ resample(const struct options *options, int64_t now)
         } else {
             if (c->releasing) {
                 spent = coast(c, last, target, timer_armed == 2 ? frame : opts->period, &x, &y);
-                if (!c->coasting && c->samples >= 2)
-                    predict(c, last, target, &x, &y);
+                if (!c->coasting && c->emitted_x >= 0) {
+                    x = c->emitted_x;
+                    y = c->emitted_y;
+                    c->offset_x = c->offset_y = 0;
+                }
             } else if (c->samples >= 2)
                 predict(c, last, target, &x, &y);
             c->predicted = x != last->x || y != last->y;
