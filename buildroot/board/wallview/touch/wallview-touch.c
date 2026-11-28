@@ -666,13 +666,15 @@ handle_frame(int64_t time)
             continue;
         wake = 1;
         c->ended = 0;
+        int64_t hold = c->reach < opts->predict_travel ? opts->tap_hold : opts->lift_hold;
+
         if (!c->active || c->releasing) {
             c->dirty = 0;
-        } else if (opts->lift_hold > 0 && !landing && holds(slot, time)) {
+        } else if (hold > 0 && !landing && holds(slot, time)) {
             c->releasing = 1;
             c->coasting = 0;
             c->lift_at = time;
-            c->release_at = time + (c->reach < opts->predict_travel ? opts->tap_hold : opts->lift_hold);
+            c->release_at = time + hold;
             c->dirty = 0;
         } else {
             release(slot);

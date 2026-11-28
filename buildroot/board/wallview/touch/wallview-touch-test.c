@@ -237,16 +237,16 @@ int main(void) {
 	      cases++; merged += downs < 2; }
 	  printf("second tap on or behind the down point of a tap that slid back in small steps (%d cases): merged %d\n", cases, merged); assert(merged == 0); }
 
-	{ int64_t late[2];
-	  for (int k = 0; k < 2; k++) {
-	      o.tap_hold = k ? 30 * MS : o.lift_hold;
+	{ int64_t late[3];
+	  for (int k = 0; k < 3; k++) {
+	      o.tap_hold = k == 2 ? 0 : k ? 30 * MS : o.lift_hold;
 	      reset(); t += 500 * MS; down(t, 0, 60, 200, 200); drain(t);
 	      double x = 200, y = 200; t = drag(t, 0, &x, &y, 300, 0, 3, 10 * MS);
 	      up(t, 0); drain(t); int64_t u = t; while (ups == 0 && clock_t0 < u + 300 * MS) run_until(clock_t0 + o.period);
 	      late[k] = clock_t0 - u; run_until(t + 400 * MS); t += 400 * MS; }
 	  o.tap_hold = o.lift_hold;
-	  printf("held sloppy tap released after %lld ms, with TAP_LIFT_MS 30 after %lld ms\n", (long long)(late[0] / MS), (long long)(late[1] / MS));
-	  assert(late[0] >= 70 * MS && late[1] <= 40 * MS); }
+	  printf("held sloppy tap released after %lld ms, with TAP_LIFT_MS 30 after %lld ms, with 0 after %lld ms\n", (long long)(late[0] / MS), (long long)(late[1] / MS), (long long)(late[2] / MS));
+	  assert(late[0] >= 70 * MS && late[1] <= 40 * MS && late[2] <= 0); }
 
 	{ int worst = 0, cases = 0;
 	  for (int slide = 2; slide <= 12; slide++) for (int ph = 0; ph < 8; ph++) for (int steps = 2; steps <= 4; steps++) {
