@@ -267,13 +267,22 @@ int main(void) {
 	    up(t, 0); run_until(t + 400 * MS); t += 400 * MS; }
 	  printf("blend settles on the finger at 60 Hz, BLEND 0.9, MAX_GAP_MS 100: %d of %d off\n", bad, n); assert(!bad);
 	  o = saved; period = o.period; }
-	for (int after = 9; after <= 25; after += 8) {
+	for (int after = 9; after <= 93; after += 4) {
 	  reset(); x = 100; down(t, 0, 50, 100, 100); down(t, 1, 51, 100, 300); drain(t);
 	  for (int i = 0; i < 6; i++) { t += 30 * MS; run_until(t); x += 15; move(t, 0, (int)x, 100); move(t, 1, (int)x, 300); drain(t); }
 	  t += 70 * MS; run_until(t); x += 75; move(t, 0, (int)x, 100); move(t, 1, (int)x, 300); drain(t);
-	  t += after * MS; run_until(t); up(t, 0); up(t, 1); drain(t);
-	  printf("two fingers lifted %d ms into a gap blend: released at %d %d, finger at %d\n", after, outx[0], outx[1], (int)x);
-	  assert(abs(outx[0] - (int)x) <= 5 && abs(outx[1] - (int)x) <= 5); run_until(t + 300 * MS); t += 300 * MS; }
+	  t += after * MS; run_until(t); int pre = outx[0]; up(t, 0); up(t, 1); drain(t);
+	  printf("two fingers lifted %d ms into a gap blend: shown %d, released at %d %d, finger at %d\n", after, pre, outx[0], outx[1], (int)x);
+	  assert(outx[0] >= pre && outx[1] == outx[0] && (pre >= (int)x || outx[0] == (int)x)); run_until(t + 300 * MS); t += 300 * MS; }
+
+	for (int after = 0; after <= 25; after += 5) {
+	  reset(); x = 50; y = 240; down(t, 0, 52, 50, 240); drain(t);
+	  t = drag(t, 0, &x, &y, 400, 0, 8, 25 * MS); int lx = (int)x;
+	  run_until(t + 80 * MS); up(t + 80 * MS, 0); drain(t + 80 * MS);
+	  t += 155 * MS; run_until(t); down(t, 0, 53, lx + 10, 240); drain(t);
+	  run_until(t + after * MS); int pre = outx[0]; up(t + after * MS, 0); drain(t + after * MS);
+	  printf("lift %d ms after a rejoin behind the coast: shown %d, released at %d\n", after, pre, outx[0]); assert(outx[0] >= pre);
+	  run_until(t + 400 * MS); t += 400 * MS; }
 
 	setenv("WALLVIEW_TOUCH_X", "1e13", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);
 	setenv("WALLVIEW_TOUCH_X", "nan", 1); assert(env_number("WALLVIEW_TOUCH_X", 5) == 5);

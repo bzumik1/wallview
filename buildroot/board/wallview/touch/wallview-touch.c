@@ -484,14 +484,21 @@ release(int slot)
     struct contact *c = &contacts[slot];
     int first = pointer_slot() == slot;
     struct sample *last = c->samples ? &c->history[c->samples - 1] : NULL;
+    struct sample *prev = c->samples > 1 ? &c->history[c->samples - 2] : NULL;
+    int blended = c->blend || c->offset_x != 0 || c->offset_y != 0;
+    double dx = 0, dy = 0;
 
-    double vx, vy;
-    int behind = (c->offset_x != 0 || c->offset_y != 0) && c->samples > 1 &&
-        (velocity(c, &vx, &vy), c->offset_x * vx + c->offset_y * vy <= 0);
+    if (prev) {
+        dx = last->x - prev->x;
+        dy = last->y - prev->y;
+        if (dx == 0 && dy == 0)
+            velocity(c, &dx, &dy);
+    }
+    int ahead = prev && c->emitted_x >= 0 && (c->emitted_x - last->x) * dx + (c->emitted_y - last->y) * dy > 0;
 
     c->releasing = 0;
     c->coasting = 0;
-    if (last && (!c->predicted || c->fresh || behind))
+    if (last && (blended ? !ahead : !c->predicted || c->fresh))
         emit_position(slot, clamp(last->x, min_x, max_x), clamp(last->y, min_y, max_y));
     c->fresh = 0;
     c->blend = 0;
@@ -1059,8 +1066,13 @@ load_options(struct options *options)
 {
     int rate = (int)env_number("WALLVIEW_TOUCH_RATE", 120);
 
+    if (rate < 2 || rate > 1000) {
+        fprintf(stderr, "wallview-touch: ignoring WALLVIEW_TOUCH_RATE outside 2-1000\n");
+        rate = 120;
+    }
+
     *options = (struct options){
-        .period = NSEC_PER_SEC / (rate >= 2 && rate <= 1000 ? rate : 120),
+        .period = NSEC_PER_SEC / rate,
         .latency = env_ms("WALLVIEW_TOUCH_LATENCY_MS", 16),
         .max_prediction = env_ms("WALLVIEW_TOUCH_PREDICTION_MS", 30),
         .max_sample_gap = env_ms("WALLVIEW_TOUCH_MAX_GAP_MS", 150),

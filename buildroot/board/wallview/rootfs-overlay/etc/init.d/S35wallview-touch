@@ -20,6 +20,7 @@ touch_loop() {
 		sleep 2 &
 		wait $!
 	done
+	rm -f "$PIDFILE"
 }
 
 case "$1" in
